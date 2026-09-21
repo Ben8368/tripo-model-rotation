@@ -1,0 +1,6 @@
+{
+  "service": "tripo-model-rotation",
+  "enabled": true,
+  "minimumVersion": "3.9.5",
+  "message": "Public repository runtime enabled"
+}

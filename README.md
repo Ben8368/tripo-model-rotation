@@ -33,11 +33,14 @@ Tripo Studio 3D 模型旋转、录屏与批量导出用户脚本。
 ```text
 @updateURL   https://raw.githubusercontent.com/Ben8368/tripo-model-rotation/master/tripo-model-rotation.user.js
 @downloadURL https://raw.githubusercontent.com/Ben8368/tripo-model-rotation/master/tripo-model-rotation.user.js
+@require     https://raw.githubusercontent.com/Ben8368/tripo-model-rotation/v3.9.5/dist/tripo-core.min.js
 ```
 
-后续发布新版本时，只需更新脚本版本号并推送到 `master` 分支。Tampermonkey 或 Violentmonkey 会按自己的更新周期检查 GitHub Raw 文件；也可以在用户脚本管理器中手动执行“检查更新”。
+根目录脚本是很小的安装与更新入口，业务核心由 `@require` 从同一 GitHub 仓库的不可变版本标签加载。油猴管理器会缓存远程依赖，不需要注册额外 CDN 账号。
 
-当前版本：`3.9.2`
+后续发布新版本时，更新 `package.json` 的版本号并执行 `npm run check`，构建器会让入口自动指向对应的 `v版本号` 标签。必须同时推送 `master` 和该版本标签，否则新入口无法取得核心文件。核心每次页面加载还会请求 `master/runtime-status.json`：仓库公开且状态启用时才启动，仓库改为私有后匿名请求失败，缓存核心在刷新后也会停止运行。Tampermonkey 或 Violentmonkey 会按自己的更新周期检查入口；也可以在用户脚本管理器中手动执行“检查更新”。
+
+当前版本：`3.9.5`
 
 ## 使用方法
 
@@ -66,12 +69,12 @@ Tripo Studio 3D 模型旋转、录屏与批量导出用户脚本。
 
 - 普通输出：固定帧率 H.264 MP4
 - 透明输出：无损 PNG 帧封装为透明 MOV
-- 可隐藏右上角坐标轴
+- 不再用矩形遮罩擦除坐标轴，避免损伤模型像素；可识别的独立 DOM 坐标轴会在采集期间临时隐藏
 - 可在后台继续等待原生渲染恢复
 
 ### 整个当前标签页
 
-当前仅支持截图。整标签页视频无法可靠保证每一帧与相机角度严格对应，因此脚本会在视频导出前提示切换回“仅模型画面”。批量导出选择为标签页时，也只能选择截图项目。
+当前仅支持截图。单项截图选择保存位置后，需要再点击“开始共享”并选择当前标签页；这是浏览器对屏幕共享用户手势的要求。整标签页视频无法可靠保证每一帧与相机角度严格对应，因此脚本会在视频导出前提示切换回“仅模型画面”。批量导出选择为标签页时，也只能选择截图项目。
 
 ### 批量导出
 
@@ -92,37 +95,84 @@ Tripo Studio 3D 模型旋转、录屏与批量导出用户脚本。
 - 透明输出时，Tripo 模型 Canvas 必须支持 Alpha
 - 使用整标签页截图时，允许浏览器共享当前标签页
 
-脚本依赖的 `mp4-muxer` 已直接内嵌，不需要运行时从 CDN 加载额外脚本。
+脚本依赖的 `mp4-muxer` 已直接内嵌在远程核心构建物中，不会再向第三方 CDN 请求依赖。
 
 ## 数据与隐私
 
 - 工程名称和导出设置保存在当前浏览器的 `localStorage` 中。
 - 模型画面和导出文件在本地处理。
 - 脚本不会上传模型或导出内容。
-- 安装和更新时，用户脚本管理器会访问 GitHub Raw 地址。
+- 安装、更新和首次取得对应版本核心时，用户脚本管理器会访问 GitHub Raw 地址。
 
 ## 已知限制
 
 脚本需要读取 Tripo Studio 当前页面的 Canvas、Vue 和 Tres/Three.js 渲染上下文。Tripo 前端升级内部结构后，可能需要同步适配。脚本找不到可靠渲染入口时会停止导出，避免生成错帧文件。
 
+## 源码与构建产物
+
+- `src/main.js`：可读业务源码。
+- `src/userscript.meta.txt`：用户脚本元数据模板。
+- `package.json`：唯一版本来源。
+- `scripts/build.mjs`：esbuild 打包脚本。
+- `tripo-model-rotation.user.js`：**自动生成的轻量安装入口，不要直接编辑**；通过 `@require` 加载 GitHub Raw 上的版本核心。
+- `dist/tripo-core.min.js`：发布到 GitHub 版本标签的压缩核心，是远程依赖源。
+- `dist/tripo-model-rotation.standalone.user.js`：完整单文件备用安装包，不依赖远程 `@require`。
+- `tests/regression.test.mjs`：源码与压缩代码的回归测试。
+- `tests/MANUAL.md`：真实浏览器验收清单。
+
+构建将固定版本的 mp4-muxer 打包进远程核心，压缩代码并缩短局部标识符，移除业务注释，不生成 source map。
+第三方 MIT 许可仍保留在核心、单文件备用包和 `THIRD_PARTY_NOTICES.md` 中。
+为保证浏览器及 Vue/Three.js 集成稳定，不混淆属性名、不使用 eval、自防御或反调试代码。
+
+### 能否让安装包不暴露源码？
+
+**可以让构建产物不同于可读源码，但不能让客户端 JavaScript 真正保密。**
+用户脚本管理器和浏览器都能读取最终 JS；压缩/混淆只能提高理解成本，无法阻止格式化、调试或逆向。
+不要把密钥、令牌或必须保密的算法放入客户端脚本。
+
+如果不希望公开可维护源码，建议将源码放在私有仓库，另设仅发布入口和 `dist/` 构建产物的公开仓库（迁移时需调整更新 URL）。
+现有公开 Git 历史中的旧源码不会因压缩新版本、删除文件而消失，已有副本也无法收回。
+真正需要保密的逻辑应放在服务端；这会改变当前“本地处理、不上传”的架构和隐私约定。
+
 ## 开发与发布
 
-修改脚本后：
+需要 Node.js 22 或更新版本。
 
-1. 同时更新用户脚本头部的 `@version` 和 `SCRIPT_VERSION`。
-2. 执行语法检查：
+```powershell
+npm ci
+npm run check
+```
 
-   ```powershell
-   node --check .\tripo-model-rotation.user.js
-   ```
+`npm run check` 会生成轻量入口、GitHub 远程核心和单文件备用包，执行回归测试并做语法检查。
+依赖由 `package-lock.json` 锁定；运行时只访问本仓库的 GitHub Raw，不访问第三方 CDN。
+mp4-muxer 5.2.2 已被上游标记为 deprecated，本次保留原版本以避免同时变更视频封装行为，后续应单独评估迁移。
 
-3. 提交并推送到 `master` 分支：
+发布步骤：
 
-   ```powershell
-   git add .
-   git commit -m "更新脚本"
-   git push origin master
-   ```
+1. 修改 `src/`，补充测试。
+2. 修改 `package.json` 的版本号，同步本文版本说明。
+3. 执行 `npm run check`，按 `tests/MANUAL.md` 在 Tripo 实际验收。
+4. 同时提交源码、锁文件、根目录入口和 `dist/` 构建物。
+5. 创建与 `package.json` 完全一致的版本标签，例如 `git tag -a v3.9.5 -m "v3.9.5"`。
+6. 使用 `git push --atomic origin master v3.9.5` 同时发布入口和远程核心。
+
+不要移动或复用已经发布的版本标签。入口引用版本标签是为了让同一入口版本永久取得同一份核心文件，避免 `master` 更新或缓存造成入口与核心错配。
+
+### 3.9.5 发布结构
+
+- 根目录安装脚本改为轻量入口，通过 `@require` 从 GitHub Raw 加载核心。
+- 核心 URL 固定到 `v版本号` Git 标签，不直接依赖可变的 `master` 核心文件。
+- 生成完整单文件备用包，便于 GitHub Raw 不可用时手动安装和排障。
+- 自动测试覆盖入口元数据、远程核心、备用包和可重复构建。
+- 增加 GitHub Raw 公开状态检查；仓库私有后，用户刷新页面时脚本不再启动。
+
+### 3.9.3 修复
+
+- 停止非录制旋转时结束动画 Promise，释放导出占用状态。
+- 为整个导出任务增加取消状态，覆盖批量截图、材质切换及帧等待；保留已保存文件与保存恢复流程。
+- 去掉破坏模型像素的坐标轴矩形遮罩，临时隐藏可识别的 DOM 叠层并恢复原样式。
+- 单项标签页截图重新获取共享操作手势，等待共享新帧；共享失败时释放媒体流。
+- 拆分源码与压缩安装包，加入自动测试和构建流程。
 
 仓库地址：[Ben8368/tripo-model-rotation](https://github.com/Ben8368/tripo-model-rotation)
 
