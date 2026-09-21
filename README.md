@@ -33,14 +33,18 @@ Tripo Studio 3D 模型旋转、录屏与批量导出用户脚本。
 ```text
 @updateURL   https://raw.githubusercontent.com/Ben8368/tripo-model-rotation/master/tripo-model-rotation.user.js
 @downloadURL https://raw.githubusercontent.com/Ben8368/tripo-model-rotation/master/tripo-model-rotation.user.js
-@require     https://raw.githubusercontent.com/Ben8368/tripo-model-rotation/v3.9.5/dist/tripo-core.min.js
+@require     https://raw.githubusercontent.com/Ben8368/tripo-model-rotation/v3.9.6/dist/tripo-core.min.js
 ```
 
 根目录脚本是很小的安装与更新入口，业务核心由 `@require` 从同一 GitHub 仓库的不可变版本标签加载。油猴管理器会缓存远程依赖，不需要注册额外 CDN 账号。
 
-后续发布新版本时，更新 `package.json` 的版本号并执行 `npm run check`，构建器会让入口自动指向对应的 `v版本号` 标签。必须同时推送 `master` 和该版本标签，否则新入口无法取得核心文件。核心每次页面加载还会请求 `master/runtime-status.json`：仓库公开且状态启用时才启动，仓库改为私有后匿名请求失败，缓存核心在刷新后也会停止运行。Tampermonkey 或 Violentmonkey 会按自己的更新周期检查入口；也可以在用户脚本管理器中手动执行“检查更新”。
+后续发布新版本时，更新 `package.json` 的版本号并执行 `npm run check`，构建器会让入口自动指向对应的 `v版本号` 标签。必须同时推送 `master` 和该版本标签，否则新入口无法取得核心文件。核心每次页面加载还会请求 `master/runtime-status.json`：仓库公开、状态启用且当前版本不低于 `minimumVersion` 时才启动，仓库改为私有后匿名请求失败，缓存核心在刷新后也会停止运行。Tampermonkey 或 Violentmonkey 会按自己的更新周期检查入口；也可以在用户脚本管理器中手动执行“检查更新”。
 
-当前版本：`3.9.5`
+当前版本：`3.9.6`
+
+`minimumVersion` 必须是稳定版本格式 `major.minor.patch`（例如 `3.9.5`），按三个数值段比较；缺失或格式无效时拒绝启动。该检查从 3.9.6 起生效，不能追溯修复已缓存的 3.9.5 或更早核心。当前最低版本配置保持 3.9.5，不随本次修复自动提高。
+
+单文件备用包的更新和下载地址均指向 `dist/tripo-model-rotation.standalone.user.js`，后续升级仍保持单文件形式。已安装的旧备用包需要手动安装新版一次才能采用新的更新地址。备用包不依赖远程核心，但仍需通过上述在线运行状态检查，并非离线版本。
 
 ## 使用方法
 
@@ -153,16 +157,24 @@ mp4-muxer 5.2.2 已被上游标记为 deprecated，本次保留原版本以避�
 2. 修改 `package.json` 的版本号，同步本文版本说明。
 3. 执行 `npm run check`，按 `tests/MANUAL.md` 在 Tripo 实际验收。
 4. 同时提交源码、锁文件、根目录入口和 `dist/` 构建物。
-5. 创建与 `package.json` 完全一致的版本标签，例如 `git tag -a v3.9.5 -m "v3.9.5"`。
-6. 使用 `git push --atomic origin master v3.9.5` 同时发布入口和远程核心。
+5. 创建与 `package.json` 完全一致的版本标签，例如 `git tag -a v3.9.6 -m "v3.9.6"`。
+6. 使用 `git push --atomic origin master v3.9.6` 同时发布入口和远程核心。
 
 不要移动或复用已经发布的版本标签。入口引用版本标签是为了让同一入口版本永久取得同一份核心文件，避免 `master` 更新或缓存造成入口与核心错配。
+
+### 3.9.6 审查修复
+
+- PNG 和视频共用保存状态跟踪；首次写入、自动重试、保存恢复期间，刷新或关闭页面会请求浏览器离页确认，成功保存或明确放弃后释放保护。浏览器崩溃、强制关闭及浏览器不显示确认的情形不受保证。
+- 启动时校验最低版本，拒绝缺失或非法版本策略。
+- 单文件备用包更新到自身，不再升级成远程依赖入口。
+- 保留用户明确保存的空批量选择，刷新后不再重新全选。
+- 补充源码及压缩版本回归测试和安装包运行门禁测试。
 
 ### 3.9.5 发布结构
 
 - 根目录安装脚本改为轻量入口，通过 `@require` 从 GitHub Raw 加载核心。
 - 核心 URL 固定到 `v版本号` Git 标签，不直接依赖可变的 `master` 核心文件。
-- 生成完整单文件备用包，便于 GitHub Raw 不可用时手动安装和排障。
+- 生成完整单文件备用包，便于手动安装和排查远程核心加载问题；仍依赖 GitHub Raw 运行状态检查。
 - 自动测试覆盖入口元数据、远程核心、备用包和可重复构建。
 - 增加 GitHub Raw 公开状态检查；仓库私有后，用户刷新页面时脚本不再启动。
 

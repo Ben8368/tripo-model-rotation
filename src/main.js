@@ -3,6 +3,25 @@ import * as Mp4Muxer from 'mp4-muxer';
 ;(async function () {
   'use strict';
 
+  const SCRIPT_VERSION = __SCRIPT_VERSION__;
+
+  // Release policy accepts stable major.minor.patch versions only; malformed or
+  // missing policy data must not silently bypass the runtime gate.
+  function meetsMinimumVersion(current, minimum) {
+    const parse = value => {
+      if (typeof value !== 'string' || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(value)) return null;
+      const parts = value.split('.').map(Number);
+      return parts.every(Number.isSafeInteger) ? parts : null;
+    };
+    const installed = parse(current);
+    const required = parse(minimum);
+    if (!installed || !required) return false;
+    for (let i = 0; i < installed.length; i += 1) {
+      if (installed[i] !== required[i]) return installed[i] > required[i];
+    }
+    return true;
+  }
+
   const RUNTIME_GATE_URL = 'https://raw.githubusercontent.com/Ben8368/tripo-model-rotation/master/runtime-status.json';
   async function ensureRuntimeAvailable() {
     if (typeof fetch !== 'function') return false;
@@ -18,7 +37,8 @@ import * as Mp4Muxer from 'mp4-muxer';
       });
       if (!response.ok) return false;
       const status = await response.json();
-      return status?.service === 'tripo-model-rotation' && status?.enabled === true;
+      return status?.service === 'tripo-model-rotation' && status?.enabled === true &&
+        meetsMinimumVersion(SCRIPT_VERSION, status.minimumVersion);
     } catch (error) {
       console.warn('[Tripo Rotation] 运行许可检查失败，脚本未启动', error);
       return false;
@@ -33,7 +53,6 @@ import * as Mp4Muxer from 'mp4-muxer';
   if (!await ensureRuntimeAvailable()) return;
 
   const SCRIPT_ID = 'tripo-rotation-assistant';
-  const SCRIPT_VERSION = __SCRIPT_VERSION__;
   const STORAGE_KEY = `${SCRIPT_ID}:settings:v1`;
   const PROJECT_NAMES_KEY = `${SCRIPT_ID}:project-names:v1`;
   const PROJECT_LIBRARY_KEY = `${SCRIPT_ID}:project-library:v1`;
@@ -91,6 +110,7 @@ import * as Mp4Muxer from 'mp4-muxer';
   let exportBusy = false;
   let activeTask = null;
   let pendingSave = null;
+  let activeSaves = 0;
   let statusIsSticky = false;
   let lightingSnapshot = null;
   let solidLookSnapshot = null;
@@ -552,7 +572,7 @@ import * as Mp4Muxer from 'mp4-muxer';
       videoBitrateMbps: number('videoBitrateMbps', 0, 200),
       showAxisInOutput: boolean('showAxisInOutput'),
       transparentOutput: boolean('transparentOutput'),
-      batchItems: batchItems.length ? batchItems : [...DEFAULTS.batchItems],
+      batchItems,
       batchWireframeVariants: boolean('batchWireframeVariants'),
       studioLighting: boolean('studioLighting'),
       lightingEnvironment: number('lightingEnvironment', 0, 3),
@@ -1110,6 +1130,8 @@ import * as Mp4Muxer from 'mp4-muxer';
 
   async function saveBlob(blob, filename, target = null) {
     const job = { blob, filename, target, stage: '准备保存', error: null, busy: false };
+    // Keep unload protection through writes, retries and the recovery dialog.
+    activeSaves += 1;
     try {
       return await attemptSave(job);
     } catch (error) {
@@ -1121,6 +1143,8 @@ import * as Mp4Muxer from 'mp4-muxer';
         pendingSave = job;
         showSaveRecovery(job);
       });
+    } finally {
+      activeSaves -= 1;
     }
   }
 
@@ -2459,6 +2483,15 @@ import * as Mp4Muxer from 'mp4-muxer';
     }
   }
 
+  function handleBeforeUnload(event) {
+    if (activeSaves > 0 || pendingSave || activeRun?.recording?.finalized) {
+      event.preventDefault();
+      event.returnValue = '';
+      return;
+    }
+    if (activeRun) stopRotation('页面切换，已安全停止');
+  }
+
   const host = document.createElement('div');
   host.id = SCRIPT_ID;
   host.style.cssText = 'all:initial;position:fixed;right:286px;bottom:18px;z-index:2147483646;pointer-events:none;font-family:Inter,"Microsoft YaHei",sans-serif;';
@@ -2802,14 +2835,7 @@ import * as Mp4Muxer from 'mp4-muxer';
     }
   });
 
-  window.addEventListener('beforeunload', (event) => {
-    if (pendingSave || activeRun?.recording?.finalized) {
-      event.preventDefault();
-      event.returnValue = '';
-      return;
-    }
-    if (activeRun) stopRotation('页面切换，已安全停止');
-  });
+  window.addEventListener('beforeunload', handleBeforeUnload);
 
   refreshCanvasStatus();
   canvasStatusTimer = window.setInterval(refreshCanvasStatus, 2500);

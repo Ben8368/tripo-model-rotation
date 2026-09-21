@@ -8,7 +8,8 @@ const source = await readFile(new URL('../src/main.js', import.meta.url), 'utf8'
 const names = ['runExportAction','animateDrag','stopRotation','throwIfCancelled','nextRenderedFrame','sleep',
   'exportAll','takeScreenshot','startRotation','hideAxisOverlay','createCanvasFrameSource','createFrameLock',
   'switchMaterial','switchWireframe','waitForTabFrame','createTabCapture','handleScreenshotClick',
-  'makeFramePlan','transitionProgress'];
+  'makeFramePlan','transitionProgress','normalizeSettings','meetsMinimumVersion',
+  'saveBlob','resumePendingSave','discardPendingSave','handleBeforeUnload'];
 const overrides = ['setStatus','sanitizeSettingsFromUI','requestProjectName','plannedExportItems',
   'currentMaterial','toggleIsOn','findWireframeButton','findViewerCanvas','snapshotView','findRenderContext',
   'showPanel','switchMaterial','switchWireframe','buildOutputFilename','takeScreenshot','applyView',
@@ -18,11 +19,12 @@ const overrides = ['setStatus','sanitizeSettingsFromUI','requestProjectName','pl
 // Execute the actual source (or its minified bundle) before UI mounting; do not duplicate implementations.
 const harness = source.slice(0, source.indexOf("  const host = document.createElement('div');"))
   .replace('  if (!await ensureRuntimeAvailable()) return;\n', '  if (false) return;\n') + `
-  ui = {};
+  ui = {saveRecoveryModal:{hidden:true}, saveRecoveryInfo:{}, saveRetry:{}, saveAs:{}, saveDiscard:{}};
   globalThis.api = { ${names.join(',')},
     get busy() { return exportBusy; }, get run() { return activeRun; },
     set run(value) { activeRun = value; }, get task() { return activeTask; },
     get config() { return settings; },
+    get saving() { return activeSaves; }, get pending() { return pendingSave; },
     override(o) { ${overrides.map(n=>`if (o.${n}) ${n} = o.${n};`).join('\n')} }
   };
 })();`;
@@ -53,6 +55,78 @@ async function bounded(promise) {
 }
 
 for (const [variant, code] of [['source',plain],['minified',compiled.outputFiles[0].text]]) {
+
+  test(`${variant}: minimum version compares numeric release components and rejects invalid policy`,()=>{
+    const {api}=setup(code);
+    for (const [current,minimum,expected] of [
+      ['3.9.6','3.9.5',true],['3.9.6','3.9.6',true],['3.9.6','3.9.7',false],
+      ['3.10.0','3.9.9',true],['3.9.6','3.10.0',false],['4.0.0','3.99.99',true],
+      ['3.9.6','99.0.0',false],['3.9.6',undefined,false],['3.9.6',null,false],
+      ['3.9.6',123,false],['3.9.6','3.9',false],['3.9.6','03.9.0',false],
+      ['3.9.6','3.9.6-beta',false],['3.9.6','3.9.6\n',false],
+      ['3.9.6','9007199254740992.0.0',false],['invalid','3.9.5',false],
+    ]) assert.equal(api.meetsMinimumVersion(current,minimum),expected,JSON.stringify([current,minimum]));
+  });
+  test(`${variant}: empty batch selection survives settings round trip`,()=>{
+    const {api}=setup(code);
+    assert.equal(api.normalizeSettings(JSON.parse(JSON.stringify({batchItems:[]}))).batchItems.length,0);
+    assert.equal(api.normalizeSettings({}).batchItems.length,9);
+    assert.equal(api.normalizeSettings({batchItems:null}).batchItems.length,9);
+    assert.deepEqual(Array.from(api.normalizeSettings({batchItems:['screenshot:solid','bad','screenshot:solid']}).batchItems),['screenshot:solid']);
+    assert.equal(api.normalizeSettings({batchItems:['bad']}).batchItems.length,0);
+  });
+  function unloadPrevented(api) {
+    let prevented=false;const event={preventDefault(){prevented=true;}};
+    api.handleBeforeUnload(event);
+    if(prevented)assert.equal(event.returnValue,'');
+    return prevented;
+  }
+  test(`${variant}: screenshot save protects unload throughout write and close, then releases`,async()=>{
+    const {api}=setup(code);let finishWrite,finishClose;
+    const enteredWrite=Promise.withResolvers(),enteredClose=Promise.withResolvers();
+    const blob=new Blob(['png']);
+    const handle={name:'image.png',async createWritable(){return {
+      write(){enteredWrite.resolve();return new Promise(resolve=>{finishWrite=resolve;});},
+      close(){enteredClose.resolve();return new Promise(resolve=>{finishClose=resolve;});},abort(){},
+    };},async getFile(){return {size:blob.size};}};
+    assert.equal(unloadPrevented(api),false);
+    const saved=api.saveBlob(blob,'image.png',{kind:'file',handle});
+    assert.equal(api.run,null);assert.equal(api.pending,null);assert.equal(api.saving,1);
+    assert.equal(unloadPrevented(api),true);
+    await bounded(enteredWrite.promise);assert.equal(unloadPrevented(api),true);
+    finishWrite();await bounded(enteredClose.promise);assert.equal(unloadPrevented(api),true);
+    finishClose();assert.equal(await bounded(saved),'image.png');
+    assert.equal(api.saving,0);assert.equal(unloadPrevented(api),false);
+  });
+  test(`${variant}: recovery retains unload protection through failed retry and save-as cancellation`,async()=>{
+    const {api}=setup(code);const blob=new Blob(['png']);let fail=true;
+    const handle={name:'image.png',async createWritable(){if(fail)throw Error('disk error');return {async write(){},async close(){}};},
+      async getFile(){return {size:blob.size};}};
+    const saved=api.saveBlob(blob,'image.png',{kind:'file',handle});
+    await new Promise(resolve=>setImmediate(resolve));assert(api.pending);
+    const job=api.pending;
+    assert.equal(unloadPrevented(api),true);
+    await api.resumePendingSave();assert.equal(api.pending,job);assert.equal(api.saving,1);
+    api.override({chooseSingleFile:async()=>{throw new DOMException('cancelled','AbortError');}});
+    await api.resumePendingSave(true);assert.equal(api.pending,job);assert.equal(unloadPrevented(api),true);
+    api.stopRotation();assert.equal(api.pending,job);
+    fail=false;await api.resumePendingSave();assert.equal(await bounded(saved),'image.png');
+    assert.equal(api.pending,null);assert.equal(api.saving,0);assert.equal(unloadPrevented(api),false);
+  });
+  test(`${variant}: explicitly discarding failed save releases unload protection`,async()=>{
+    const {api,context}=setup(code);
+    const saved=api.saveBlob(new Blob(['png']),'image.png',{kind:'file',handle:{async createWritable(){throw Error('disk error');}}});
+    const rejected=assert.rejects(saved,/用户放弃/);
+    await new Promise(resolve=>setImmediate(resolve));
+    context.window.confirm=()=>false;api.discardPendingSave();assert.equal(unloadPrevented(api),true);
+    context.window.confirm=()=>true;api.discardPendingSave();await bounded(rejected);
+    assert.equal(api.pending,null);assert.equal(api.saving,0);assert.equal(unloadPrevented(api),false);
+  });
+  test(`${variant}: completed video finalization still protects unload`,()=>{
+    const {api}=setup(code);api.run={recording:{finalized:true}};
+    assert.equal(unloadPrevented(api),true);api.run=null;assert.equal(unloadPrevented(api),false);
+  });
+
   test(`${variant}: cancelling preview releases busy state and allows another action`, async()=>{
     const {api,raf}=setup(code);
     const action=api.runExportAction(async()=>{

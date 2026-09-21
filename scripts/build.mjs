@@ -13,6 +13,9 @@ const core = notice + result.outputFiles[0].text;
 const standaloneHeader = header
   .split('\n')
   .filter(line => !line.startsWith('// @require'))
+  .map(line => /^\/\/ @(updateURL|downloadURL)\s/.test(line)
+    ? line.replace('/master/tripo-model-rotation.user.js', '/master/dist/tripo-model-rotation.standalone.user.js')
+    : line)
   .join('\n');
 
 await mkdir('dist', { recursive: true });

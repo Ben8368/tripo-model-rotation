@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tripo 3D 模型录屏旋转助手
 // @namespace    codex.tripo.rotation
-// @version      3.9.5
+// @version      3.9.6
 // @description  支持固定帧 MP4、透明 MOV/PNG、线框叉乘和独立明亮白膜效果的 Tripo Studio 模型旋转与转场助手。
 // @author       Codex
 // @license      MIT
@@ -9,7 +9,7 @@
 // @supportURL   https://github.com/Ben8368/tripo-model-rotation/issues
 // @updateURL    https://raw.githubusercontent.com/Ben8368/tripo-model-rotation/master/tripo-model-rotation.user.js
 // @downloadURL  https://raw.githubusercontent.com/Ben8368/tripo-model-rotation/master/tripo-model-rotation.user.js
-// @require      https://raw.githubusercontent.com/Ben8368/tripo-model-rotation/v3.9.5/dist/tripo-core.min.js
+// @require      https://raw.githubusercontent.com/Ben8368/tripo-model-rotation/v3.9.6/dist/tripo-core.min.js
 // @match        https://studio.tripo3d.ai/workspace/generate
 // @match        https://studio.tripo3d.ai/workspace/generate/*
 // @match        https://studio.tripo3d.ai/*/workspace/generate
