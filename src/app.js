@@ -5,6 +5,7 @@ import { makeFramePlan, transitionProgress } from './rotation/frame-plan';
 import { clamp } from './utils/numbers';
 import { safeFilenamePart, formatOutputFilename } from './utils/filename';
 import { validProjectUrl } from './projects/project-url';
+import { planBatchJobs, selectedBatchItems } from './batch/plan';
 import { createProjectStorage, projectNameFor, rememberProject } from './storage/project-library';
 
 /** @param {string} version */
@@ -603,7 +604,7 @@ export function startApp(version) {
 
   function selectedExportItems() {
     const keys = Array.isArray(settings.batchItems) ? settings.batchItems : DEFAULTS.batchItems;
-    return EXPORT_ITEMS.filter(item => keys.includes(item.key));
+    return selectedBatchItems(EXPORT_ITEMS, keys);
   }
 
   function imageBasename(image) {
@@ -638,11 +639,7 @@ export function startApp(version) {
   }
 
   function plannedExportItems() {
-    const selected = selectedExportItems();
-    const includeWireframe = settings.batchWireframeVariants && wireframeAvailable();
-    return selected.flatMap(item => includeWireframe
-      ? [{ ...item, wireframe: false }, { ...item, wireframe: true }]
-      : [{ ...item, wireframe: false }]);
+    return planBatchJobs(EXPORT_ITEMS, settings, wireframeAvailable());
   }
 
   function syncBatchSelection() {

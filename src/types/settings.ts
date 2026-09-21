@@ -4,6 +4,18 @@ export type MaterialId = 'solid' | 'pbr' | 'normal';
 export type ExportKind = 'screenshot' | RotationMode;
 export type ExportKey = `${ExportKind}:${MaterialId}`;
 
+export interface Material {
+  id: MaterialId;
+  label: string;
+  icon: string;
+}
+
+export interface ExportItem {
+  key: ExportKey;
+  kind: ExportKind;
+  material: Material;
+}
+
 export interface Settings {
   configVersion: number;
   direction: -1 | 1;

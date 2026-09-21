@@ -12,7 +12,9 @@ for (const minify of [false, true]) {
         export { makeFramePlan, transitionProgress } from './rotation/frame-plan';
         export { formatOutputFilename } from './utils/filename';
         export { validProjectUrl } from './projects/project-url';
-        export { createProjectStorage, parseProjectNames, parseProjectLibrary, projectNameFor, rememberProject } from './storage/project-library';`,
+        export { createProjectStorage, parseProjectNames, parseProjectLibrary, projectNameFor, rememberProject } from './storage/project-library';
+        export { planBatchJobs, selectedBatchItems } from './batch/plan';
+        export { EXPORT_ITEMS } from './settings/catalog';`,
       resolveDir: fileURLToPath(new URL('../src/', import.meta.url)),
     },
     bundle: true, write: false, minify, format: 'esm', target: ['chrome109'],
@@ -56,6 +58,19 @@ for (const minify of [false, true]) {
     assert.equal(defaults.batchItems.length, 9);
     assert.equal(api.DEFAULT_SETTINGS.batchItems.length, 9);
     assert(Object.isFrozen(api.DEFAULT_SETTINGS.batchItems));
+  });
+  test(`${variant}: batch job plan preserves selected order and only expands valid wireframe variants`, () => {
+    const settings = api.normalizeSettings({ batchItems: ['transition:normal', 'screenshot:solid'] });
+    const selected = api.selectedBatchItems(api.EXPORT_ITEMS, settings.batchItems);
+    assert.deepEqual(selected.map(item => item.key), ['screenshot:solid', 'transition:normal']);
+    assert.deepEqual(api.planBatchJobs(api.EXPORT_ITEMS, settings, false).map(job => [job.key, job.wireframe]), [
+      ['screenshot:solid', false], ['transition:normal', false],
+    ]);
+    settings.batchWireframeVariants = true;
+    assert.deepEqual(api.planBatchJobs(api.EXPORT_ITEMS, settings, true).map(job => [job.key, job.wireframe]), [
+      ['screenshot:solid', false], ['screenshot:solid', true],
+      ['transition:normal', false], ['transition:normal', true],
+    ]);
   });
   test(`${variant}: transition trajectory is monotonic in either direction with exact hold poses`, () => {
     for (const direction of [-1, 1]) {
