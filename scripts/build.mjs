@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
 const header = (await readFile(new URL('../src/userscript.meta.txt', import.meta.url), 'utf8')).replace(/\r\n/g, '\n').replaceAll('{{VERSION}}', pkg.version);
 const result = await build({
-  entryPoints: ['src/main.js'], bundle: true, minify: true, format: 'iife',
+  entryPoints: ['src/main.ts'], bundle: true, minify: true, format: 'iife',
   target: ['chrome109'], legalComments: 'none', sourcemap: false, write: false,
   define: { __SCRIPT_VERSION__: JSON.stringify(pkg.version) },
 });

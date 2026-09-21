@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
 import { build } from 'esbuild';
+import { fileURLToPath } from 'node:url';
 
-const source = await readFile(new URL('../src/main.js', import.meta.url), 'utf8');
+const source = await readFile(new URL('../src/app.js', import.meta.url), 'utf8').then(text => text.replace(/\r\n/g, '\n'));
 const names = ['runExportAction','animateDrag','stopRotation','throwIfCancelled','nextRenderedFrame','sleep',
   'exportAll','takeScreenshot','startRotation','hideAxisOverlay','createCanvasFrameSource','createFrameLock',
   'switchMaterial','switchWireframe','waitForTabFrame','createTabCapture','handleScreenshotClick',
-  'makeFramePlan','transitionProgress','normalizeSettings','meetsMinimumVersion',
   'saveBlob','resumePendingSave','discardPendingSave','handleBeforeUnload'];
 const overrides = ['setStatus','sanitizeSettingsFromUI','requestProjectName','plannedExportItems',
   'currentMaterial','toggleIsOn','findWireframeButton','findViewerCanvas','snapshotView','findRenderContext',
@@ -16,9 +16,11 @@ const overrides = ['setStatus','sanitizeSettingsFromUI','requestProjectName','pl
   'dispatchPointer','scheduleAutoShow','finalizeRecording','applySolidLook','findAxisOverlay',
   'createViewerBackgroundCanvas','createFrameLock','createCanvasFrameSource','saveBlob','chooseSingleFile',
   'requestBatchCaptureStart','createTabCapture'];
-// Execute the actual source (or its minified bundle) before UI mounting; do not duplicate implementations.
+// Transitional JS integration harness. TS modules are tested via exports in logic.test.mjs.
+assert(source.includes("  const host = document.createElement('div');"));
+assert(source.includes('export function startApp(version) {'));
 const harness = source.slice(0, source.indexOf("  const host = document.createElement('div');"))
-  .replace('  if (!await ensureRuntimeAvailable()) return;\n', '  if (false) return;\n') + `
+  .replace('export function startApp(version) {', 'function startApp(version) {') + `
   ui = {saveRecoveryModal:{hidden:true}, saveRecoveryInfo:{}, saveRetry:{}, saveAs:{}, saveDiscard:{}};
   globalThis.api = { ${names.join(',')},
     get busy() { return exportBusy; }, get run() { return activeRun; },
@@ -27,11 +29,15 @@ const harness = source.slice(0, source.indexOf("  const host = document.createEl
     get saving() { return activeSaves; }, get pending() { return pendingSave; },
     override(o) { ${overrides.map(n=>`if (o.${n}) ${n} = o.${n};`).join('\n')} }
   };
-})();`;
-const compiled = await build({stdin:{contents:harness,resolveDir:process.cwd()},bundle:true,
-  write:false,minify:true,format:'iife',define:{__SCRIPT_VERSION__:'"test"'}});
-const plain = harness.replace("import * as Mp4Muxer from 'mp4-muxer';",'const Mp4Muxer = {};')
-  .replace('__SCRIPT_VERSION__','"test"');
+}
+startApp("test");`;
+const buildHarness = async minify => (await build({
+  stdin: { contents: harness, resolveDir: fileURLToPath(new URL('../src/', import.meta.url)) },
+  bundle: true, write: false, minify, format: 'iife', target: ['chrome109'],
+  define: { __SCRIPT_VERSION__: '"test"' },
+})).outputFiles[0].text;
+const compiled = await buildHarness(true);
+const plain = await buildHarness(false);
 
 function setup(code) {
   const raf = new Map(); let id=0;
@@ -54,27 +60,8 @@ async function bounded(promise) {
   })]); } finally {clearTimeout(timer);}
 }
 
-for (const [variant, code] of [['source',plain],['minified',compiled.outputFiles[0].text]]) {
+for (const [variant, code] of [['unminified',plain],['minified',compiled]]) {
 
-  test(`${variant}: minimum version compares numeric release components and rejects invalid policy`,()=>{
-    const {api}=setup(code);
-    for (const [current,minimum,expected] of [
-      ['3.9.6','3.9.5',true],['3.9.6','3.9.6',true],['3.9.6','3.9.7',false],
-      ['3.10.0','3.9.9',true],['3.9.6','3.10.0',false],['4.0.0','3.99.99',true],
-      ['3.9.6','99.0.0',false],['3.9.6',undefined,false],['3.9.6',null,false],
-      ['3.9.6',123,false],['3.9.6','3.9',false],['3.9.6','03.9.0',false],
-      ['3.9.6','3.9.6-beta',false],['3.9.6','3.9.6\n',false],
-      ['3.9.6','9007199254740992.0.0',false],['invalid','3.9.5',false],
-    ]) assert.equal(api.meetsMinimumVersion(current,minimum),expected,JSON.stringify([current,minimum]));
-  });
-  test(`${variant}: empty batch selection survives settings round trip`,()=>{
-    const {api}=setup(code);
-    assert.equal(api.normalizeSettings(JSON.parse(JSON.stringify({batchItems:[]}))).batchItems.length,0);
-    assert.equal(api.normalizeSettings({}).batchItems.length,9);
-    assert.equal(api.normalizeSettings({batchItems:null}).batchItems.length,9);
-    assert.deepEqual(Array.from(api.normalizeSettings({batchItems:['screenshot:solid','bad','screenshot:solid']}).batchItems),['screenshot:solid']);
-    assert.equal(api.normalizeSettings({batchItems:['bad']}).batchItems.length,0);
-  });
   function unloadPrevented(api) {
     let prevented=false;const event={preventDefault(){prevented=true;}};
     api.handleBeforeUnload(event);
@@ -249,10 +236,6 @@ for (const [variant, code] of [['source',plain],['minified',compiled.outputFiles
     await new Promise(resolve=>setImmediate(resolve));assert(callback);api.stopRotation();callback(new Blob(['png']));
     await bounded(action);assert.equal(saves,0);assert.equal(api.busy,false);
   });
-  test(`${variant}: frame plan preserves deterministic count and endpoints`,()=>{
-    const {api}=setup(code);const plan=api.makeFramePlan('uniform',api.config);
-    assert.equal(plan.angles.length,195);assert.equal(plan.angles[0],0);
-    assert.equal(plan.angles.at(-1),2*Math.PI);assert.equal(plan.movingFrames,180);
-  });
+
 }
 

@@ -114,14 +114,22 @@ Tripo Studio 3D 模型旋转、录屏与批量导出用户脚本。
 
 ## 源码与构建产物
 
-- `src/main.js`：可读业务源码。
+- `src/main.ts`：TypeScript 启动入口，通过运行门禁后启动页面功能。
+- `src/runtime/`：运行门禁和最低版本比较。
+- `src/types/settings.ts`：设置、导出类型、材质和逐帧计划的数据契约。
+- `src/settings/`：默认配置、配置规范化和导出选项。
+- `src/rotation/frame-plan.ts`：转场进度和确定性逐帧轨迹。
+- `src/projects/project-url.ts`、`src/utils/`：工程链接校验、文件名和数值工具。
+- `src/app.js`：尚未迁移的页面集成代码，包括 DOM UI、Tripo/Tres 适配、录制、保存与取消流程。
 - `src/userscript.meta.txt`：用户脚本元数据模板。
 - `package.json`：唯一版本来源。
 - `scripts/build.mjs`：esbuild 打包脚本。
 - `tripo-model-rotation.user.js`：**自动生成的轻量安装入口，不要直接编辑**；通过 `@require` 加载 GitHub Raw 上的版本核心。
 - `dist/tripo-core.min.js`：发布到 GitHub 版本标签的压缩核心，是远程依赖源。
 - `dist/tripo-model-rotation.standalone.user.js`：完整单文件备用安装包，不依赖远程 `@require`。
-- `tests/regression.test.mjs`：源码与压缩代码的回归测试。
+- `tests/logic.test.mjs`：直接通过 TS 模块导出接口测试纯逻辑，覆盖未压缩和压缩构建。
+- `tests/regression.test.mjs`：页面集成代码的回归测试，暂保留源码截取 harness。
+- `tests/artifact.test.mjs`：用户脚本发布格式、运行门禁、模拟页面挂载和可重复构建检查。
 - `tests/MANUAL.md`：真实浏览器验收清单。
 
 构建将固定版本的 mp4-muxer 打包进远程核心，压缩代码并缩短局部标识符，移除业务注释，不生成 source map。
@@ -147,7 +155,7 @@ npm ci
 npm run check
 ```
 
-`npm run check` 会生成轻量入口、GitHub 远程核心和单文件备用包，执行回归测试并做语法检查。
+`npm run check` 先执行 `tsc --noEmit`，再生成轻量入口、GitHub 远程核心和单文件备用包，执行回归测试并做语法检查。
 依赖由 `package-lock.json` 锁定；运行时只访问本仓库的 GitHub Raw，不访问第三方 CDN。
 mp4-muxer 5.2.2 已被上游标记为 deprecated，本次保留原版本以避免同时变更视频封装行为，后续应单独评估迁移。
 
@@ -161,6 +169,18 @@ mp4-muxer 5.2.2 已被上游标记为 deprecated，本次保留原版本以避�
 6. 使用 `git push --atomic origin master v3.9.6` 同时发布入口和远程核心。
 
 不要移动或复用已经发布的版本标签。入口引用版本标签是为了让同一入口版本永久取得同一份核心文件，避免 `master` 更新或缓存造成入口与核心错配。
+
+### TypeScript 迁移状态（开发中）
+
+项目始终以用户脚本形式使用。TS 类型仅用于开发期检查，esbuild 最终仍输出浏览器可执行的 JavaScript IIFE，安装入口、远程核心和 standalone 三种产物的关系保持不变。
+
+第一阶段已将启动门禁、配置规范化、导出选项、旋转计划、文件名及工程链接校验迁入严格检查的 TS 模块。网络 JSON 和本地配置以 `unknown` 进入边界，再执行运行时校验；类型不能代替页面兼容性及浏览器能力检查。
+
+`tsconfig.json` 使用 `strict: true`。为了分阶段迁移，当前同时使用 `allowJs: true`、`checkJs: false`：`src/app.js` 仍未受严格类型检查覆盖。不要把类型检查通过理解为整个应用已经类型化，也不要用 `@ts-nocheck` 或大范围 `any` 迁移剩余代码。
+
+后续按保存任务 → 录制会话 → Tripo/Tres 适配 → UI 的顺序推进。每个模块迁移时，应同时把对应的旧 harness 用例迁到模块接口测试，保留取消、资源恢复、保存失败重试等行为覆盖。页面适配层继续做运行时探测；不引入第二份 Three.js 运行时。
+
+本次重构保留配置存储键、配置版本、导出格式和 `mp4-muxer` 版本。当前 package 版本仍为 3.9.6，修改后的本地产物尚未发布；正式发布需按上述流程使用新的版本号和新标签，不能覆盖已有 `v3.9.6`。
 
 ### 3.9.6 审查修复
 

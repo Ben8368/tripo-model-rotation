@@ -6,13 +6,15 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "test": "node --test",
-    "check": "npm run build && npm test && node --check tripo-model-rotation.user.js && node --check dist/tripo-core.min.js && node --check dist/tripo-model-rotation.standalone.user.js"
+    "check": "npm run typecheck && npm run build && npm test && node --check tripo-model-rotation.user.js && node --check dist/tripo-core.min.js && node --check dist/tripo-model-rotation.standalone.user.js",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "mp4-muxer": "5.2.2"
   },
   "devDependencies": {
-    "esbuild": "0.28.2"
+    "esbuild": "0.28.2",
+    "typescript": "5.9.2"
   },
   "engines": {
     "node": ">=22"

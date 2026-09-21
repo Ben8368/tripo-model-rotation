@@ -1,104 +1,22 @@
 import * as Mp4Muxer from 'mp4-muxer';
+import { DEFAULT_SETTINGS as DEFAULTS, normalizeSettings } from './settings/settings';
+import { MATERIALS, EXPORT_KINDS, EXPORT_ITEMS } from './settings/catalog';
+import { makeFramePlan, transitionProgress } from './rotation/frame-plan';
+import { clamp } from './utils/numbers';
+import { safeFilenamePart, formatOutputFilename } from './utils/filename';
+import { validProjectUrl } from './projects/project-url';
 
-;(async function () {
+/** @param {string} version */
+export function startApp(version) {
   'use strict';
 
-  const SCRIPT_VERSION = __SCRIPT_VERSION__;
-
-  // Release policy accepts stable major.minor.patch versions only; malformed or
-  // missing policy data must not silently bypass the runtime gate.
-  function meetsMinimumVersion(current, minimum) {
-    const parse = value => {
-      if (typeof value !== 'string' || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(value)) return null;
-      const parts = value.split('.').map(Number);
-      return parts.every(Number.isSafeInteger) ? parts : null;
-    };
-    const installed = parse(current);
-    const required = parse(minimum);
-    if (!installed || !required) return false;
-    for (let i = 0; i < installed.length; i += 1) {
-      if (installed[i] !== required[i]) return installed[i] > required[i];
-    }
-    return true;
-  }
-
-  const RUNTIME_GATE_URL = 'https://raw.githubusercontent.com/Ben8368/tripo-model-rotation/master/runtime-status.json';
-  async function ensureRuntimeAvailable() {
-    if (typeof fetch !== 'function') return false;
-    const controller = typeof AbortController === 'function' ? new AbortController() : null;
-    const timer = window.setTimeout(() => controller?.abort(), 6000);
-    try {
-      const url = `${RUNTIME_GATE_URL}?cacheBust=${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      const response = await fetch(url, {
-        cache: 'no-store',
-        credentials: 'omit',
-        headers: { Accept: 'application/json' },
-        signal: controller?.signal,
-      });
-      if (!response.ok) return false;
-      const status = await response.json();
-      return status?.service === 'tripo-model-rotation' && status?.enabled === true &&
-        meetsMinimumVersion(SCRIPT_VERSION, status.minimumVersion);
-    } catch (error) {
-      console.warn('[Tripo Rotation] 运行许可检查失败，脚本未启动', error);
-      return false;
-    } finally {
-      window.clearTimeout(timer);
-    }
-  }
-
-  // The cached @require bundle must still pass this public-repository check on
-  // every page load. Making the repository private makes anonymous Raw access
-  // fail, so cached users stop working after their next reload.
-  if (!await ensureRuntimeAvailable()) return;
+  const SCRIPT_VERSION = version;
 
   const SCRIPT_ID = 'tripo-rotation-assistant';
   const STORAGE_KEY = `${SCRIPT_ID}:settings:v1`;
   const PROJECT_NAMES_KEY = `${SCRIPT_ID}:project-names:v1`;
   const PROJECT_LIBRARY_KEY = `${SCRIPT_ID}:project-library:v1`;
   const POINTER_ID = 731945;
-  const MATERIALS = Object.freeze([
-    { id: 'solid', label: '白膜', icon: 'solid.png' },
-    { id: 'pbr', label: '贴图', icon: 'pbr.png' },
-    { id: 'normal', label: '法线', icon: 'normal.png' },
-  ]);
-  const EXPORT_KINDS = Object.freeze([
-    { id: 'screenshot', label: '单帧截图' },
-    { id: 'uniform', label: '匀速圈' },
-    { id: 'transition', label: '加速转场' },
-  ]);
-  const EXPORT_ITEMS = Object.freeze(EXPORT_KINDS.flatMap(kind => MATERIALS.map(material =>
-    Object.freeze({ key: `${kind.id}:${material.id}`, kind: kind.id, material }))));
-
-  const DEFAULTS = Object.freeze({
-    configVersion: 7,
-    direction: -1,
-    pixelsPerTurnRatio: 1,
-    uniformTurns: 1,
-    uniformDuration: 3,
-    transitionTurns: 4,
-    accelerationDuration: 0.65,
-    cruiseDuration: 0.7,
-    decelerationDuration: 0.3,
-    countdown: 2,
-    settleDuration: 0.25,
-    autoHide: true,
-    recordEnabled: true,
-    recordingScope: 'canvas',
-    recordingFps: 60,
-    videoBitrateMbps: 0,
-    showAxisInOutput: false,
-    transparentOutput: false,
-    batchItems: Object.freeze(EXPORT_ITEMS.map(item => item.key)),
-    batchWireframeVariants: false,
-    studioLighting: false,
-    lightingEnvironment: 1.4,
-    lightingDirect: 1.2,
-    lightingExposure: 1.15,
-    brightSolid: false,
-    solidLift: 0.5,
-  });
-
   let settings = loadSettings();
   let panelVisible = true;
   let visibilityRevision = 0;
@@ -543,46 +461,6 @@ import * as Mp4Muxer from 'mp4-muxer';
     } catch (error) { setStatus(`逐帧入口检查失败：${error.message}`, 'error'); }
   }
 
-  function normalizeSettings(candidate) {
-    const source = candidate && typeof candidate === 'object' ? candidate : {};
-    const number = (key, min, max) => clamp(source[key], min, max, DEFAULTS[key]);
-    const boolean = (key) => typeof source[key] === 'boolean' ? source[key] : DEFAULTS[key];
-    const validExportKeys = new Set(EXPORT_ITEMS.map(item => item.key));
-    const batchItems = Array.isArray(source.batchItems)
-      ? [...new Set(source.batchItems.filter(key => validExportKeys.has(key)))]
-      : [...DEFAULTS.batchItems];
-
-    return {
-      ...DEFAULTS,
-      configVersion: DEFAULTS.configVersion,
-      direction: Number(source.direction) === 1 ? 1 : DEFAULTS.direction,
-      pixelsPerTurnRatio: number('pixelsPerTurnRatio', 0.2, 3),
-      uniformTurns: Math.round(number('uniformTurns', 1, 20)),
-      uniformDuration: number('uniformDuration', 0.5, 30),
-      transitionTurns: number('transitionTurns', 0.25, 20),
-      accelerationDuration: number('accelerationDuration', 0.05, 20),
-      cruiseDuration: number('cruiseDuration', 0, 60),
-      decelerationDuration: number('decelerationDuration', 0.05, 20),
-      countdown: number('countdown', 0, 10),
-      settleDuration: number('settleDuration', 0, 5),
-      autoHide: boolean('autoHide'),
-      recordEnabled: boolean('recordEnabled'),
-      recordingScope: source.recordingScope === 'tab' ? 'tab' : DEFAULTS.recordingScope,
-      recordingFps: number('recordingFps', 15, 120),
-      videoBitrateMbps: number('videoBitrateMbps', 0, 200),
-      showAxisInOutput: boolean('showAxisInOutput'),
-      transparentOutput: boolean('transparentOutput'),
-      batchItems,
-      batchWireframeVariants: boolean('batchWireframeVariants'),
-      studioLighting: boolean('studioLighting'),
-      lightingEnvironment: number('lightingEnvironment', 0, 3),
-      lightingDirect: number('lightingDirect', 0, 3),
-      lightingExposure: number('lightingExposure', 0.5, 2),
-      brightSolid: boolean('brightSolid'),
-      solidLift: number('solidLift', 0, 1),
-    };
-  }
-
   function readStorage(key) {
     try {
       return localStorage.getItem(key);
@@ -646,16 +524,6 @@ import * as Mp4Muxer from 'mp4-muxer';
     rememberNamedProject(value);
     if (ui?.projectName) ui.projectName.value = value;
     return true;
-  }
-
-  function validProjectUrl(value, id) {
-    try {
-      const url = new URL(value);
-      if (url.origin !== 'https://studio.tripo3d.ai' || url.username || url.password) return null;
-      const match = url.pathname.match(/^\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?workspace\/generate\/[^/]*?([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i);
-      if (!match || match[1].toLowerCase() !== String(id).toLowerCase()) return null;
-      return `${url.origin}${url.pathname}`;
-    } catch { return null; }
   }
 
   function loadProjectLibrary() {
@@ -850,13 +718,6 @@ import * as Mp4Muxer from 'mp4-muxer';
     syncBatchSelection();
   }
 
-  function safeFilenamePart(value) {
-    return String(value || '')
-      .trim()
-      .replace(/[<>:"/\\|?*\u0000-\u001f]/g, '-')
-      .replace(/[. ]+$/g, '') || '未命名工程';
-  }
-
   function currentMaterial() {
     for (const material of MATERIALS) {
       const button = findButtonWithIcon(material.icon);
@@ -868,18 +729,7 @@ import * as Mp4Muxer from 'mp4-muxer';
   }
 
   function buildOutputFilename(kind, projectName, materialLabel, wireframe = false) {
-    const project = safeFilenamePart(projectName);
-    const material = `${safeFilenamePart(materialLabel)}${wireframe ? '-线框' : ''}`;
-    if (kind === 'screenshot') return `${project}-单帧-${material}.png`;
-    if (kind === 'uniform') {
-      return `${project}-匀速圈（圈数${settings.uniformTurns}）-${material}.${settings.transparentOutput ? 'mov' : 'mp4'}`;
-    }
-    return `${project}-转场-${material}.${settings.transparentOutput ? 'mov' : 'mp4'}`;
-  }
-
-  function clamp(value, min, max, fallback) {
-    const number = Number(value);
-    return Number.isFinite(number) ? Math.min(max, Math.max(min, number)) : fallback;
+    return formatOutputFilename(kind, projectName, materialLabel, settings, wireframe);
   }
 
   function isVisible(element) {
@@ -1639,33 +1489,6 @@ import * as Mp4Muxer from 'mp4-muxer';
     });
   }
 
-  // 甩转加速：速度使用 x^3，前段蓄力，后段迅速冲向峰值。
-  function accelerationArea(x) {
-    return 0.25 * x * x * x * x;
-  }
-
-  // 快速制动：速度使用 (1-x)^3，尽快脱离高速并自然收零。
-  function decelerationArea(x) {
-    return 0.25 * (1 - Math.pow(1 - x, 4));
-  }
-
-  function transitionProgress(elapsed, acceleration, cruise, deceleration) {
-    const totalArea = acceleration * 0.25 + cruise + deceleration * 0.25;
-    if (elapsed <= acceleration) {
-      const x = acceleration > 0 ? elapsed / acceleration : 1;
-      return acceleration * accelerationArea(x) / totalArea;
-    }
-
-    if (elapsed <= acceleration + cruise) {
-      return (acceleration * 0.25 + elapsed - acceleration) / totalArea;
-    }
-
-    const decelElapsed = Math.min(deceleration, elapsed - acceleration - cruise);
-    const x = deceleration > 0 ? decelElapsed / deceleration : 1;
-    return (acceleration * 0.25 + cruise +
-      deceleration * decelerationArea(x)) / totalArea;
-  }
-
   function sanitizeSettingsFromUI() {
     settings.direction = Number(ui.direction.value) === 1 ? 1 : -1;
     settings.pixelsPerTurnRatio = clamp(ui.ratio.value, 0.2, 3, 1);
@@ -2201,26 +2024,6 @@ import * as Mp4Muxer from 'mp4-muxer';
       task?.frames.set(frame, resolve);
     });
     throwIfCancelled(task);
-  }
-
-  function makeFramePlan(mode, config) {
-    const fps = Math.round(config.recordingFps);
-    const duration = mode === 'uniform' ? config.uniformDuration * config.uniformTurns
-      : config.accelerationDuration + config.cruiseDuration + config.decelerationDuration;
-    const count = Math.max(1, Math.round(duration * fps));
-    const hold = Math.max(0, Math.round(config.settleDuration * fps));
-    const turns = mode === 'uniform' ? config.uniformTurns : config.transitionTurns;
-    const endAngle = -config.direction * 2 * Math.PI * turns;
-    const angles = [];
-    for (let index = 0; index < count; index += 1) {
-      const elapsed = duration * index / count;
-      const progress = mode === 'uniform' ? index / count : transitionProgress(elapsed,
-        config.accelerationDuration, config.cruiseDuration, config.decelerationDuration);
-      angles.push(endAngle * progress);
-    }
-    // Optional stop hold consists of identical, exact endpoint poses, not damping.
-    for (let index = 0; index < hold; index += 1) angles.push(endAngle);
-    return Object.freeze({ fps, angles: Object.freeze(angles), endAngle, movingFrames: count });
   }
 
   function verifyBatchFrame(batchState, mode, index, signature) {
@@ -2839,4 +2642,4 @@ import * as Mp4Muxer from 'mp4-muxer';
 
   refreshCanvasStatus();
   canvasStatusTimer = window.setInterval(refreshCanvasStatus, 2500);
-})();
+}
