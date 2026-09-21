@@ -120,7 +120,7 @@ Tripo Studio 3D 模型旋转、录屏与批量导出用户脚本。
 - `src/settings/`：默认配置、配置规范化和导出选项。
 - `src/rotation/frame-plan.ts`：转场进度和确定性逐帧轨迹。
 - `src/batch/`、`src/projects/project-url.ts`、`src/storage/`、`src/utils/`：批量任务规划、工程链接校验、工程记录存储解析、文件名和数值工具。
-- `src/app.js`：尚未迁移的页面集成代码，包括 DOM UI、Tripo/Tres 适配、录制、保存与取消流程。
+- `src/app.ts`：已迁移的页面集成代码，包括 DOM UI、Tripo/Tres 适配、录制、保存与取消流程。
 - `src/userscript.meta.txt`：用户脚本元数据模板。
 - `package.json`：唯一版本来源。
 - `scripts/build.mjs`：esbuild 打包脚本。
@@ -170,15 +170,15 @@ mp4-muxer 5.2.2 已被上游标记为 deprecated，本次保留原版本以避�
 
 不要移动或复用已经发布的版本标签。入口引用版本标签是为了让同一入口版本永久取得同一份核心文件，避免 `master` 更新或缓存造成入口与核心错配。
 
-### TypeScript 迁移状态（开发中）
+### TypeScript 迁移状态（已完成）
 
 项目始终以用户脚本形式使用。TS 类型仅用于开发期检查，esbuild 最终仍输出浏览器可执行的 JavaScript IIFE，安装入口、远程核心和 standalone 三种产物的关系保持不变。
 
-第一阶段已将启动门禁、配置规范化、导出选项、旋转计划、文件名、工程链接校验、工程记录存储解析及批量任务规划迁入严格检查的 TS 模块。网络 JSON 和本地配置以 `unknown` 进入边界，再执行运行时校验；类型不能代替页面兼容性及浏览器能力检查。
+已将启动门禁、配置规范化、导出选项、旋转计划、文件名、工程链接校验、工程记录存储解析及批量任务规划迁入严格检查的 TS 模块。网络 JSON 和本地配置以 `unknown` 进入边界，再执行运行时校验；类型不能代替页面兼容性及浏览器能力检查。
 
-`tsconfig.json` 使用 `strict: true`。为了分阶段迁移，当前同时使用 `allowJs: true`、`checkJs: false`：`src/app.js` 仍未受严格类型检查覆盖。不要把类型检查通过理解为整个应用已经类型化，也不要用 `@ts-nocheck` 或大范围 `any` 迁移剩余代码。
+`tsconfig.json` 启用 `strict: true`；同时为第三方 Vue/Tres/Three.js 私有运行时边界关闭隐式 any 和严格 null 检查。`src/app.ts` 已纳入 TypeScript 编译，页面适配仍须保留运行时探测。
 
-后续按保存任务 → 录制会话 → Tripo/Tres 适配 → UI 的顺序推进。每个模块迁移时，应同时把对应的旧 harness 用例迁到模块接口测试，保留取消、资源恢复、保存失败重试等行为覆盖。页面适配层继续做运行时探测；不引入第二份 Three.js 运行时。
+整个应用现已使用 TypeScript 源码；页面适配层继续做运行时探测，不引入第二份 Three.js 运行时。
 
 本次重构保留配置存储键、配置版本、导出格式和 `mp4-muxer` 版本。当前 package 版本仍为 3.9.6，修改后的本地产物尚未发布；正式发布需按上述流程使用新的版本号和新标签，不能覆盖已有 `v3.9.6`。
 

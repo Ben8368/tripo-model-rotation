@@ -5,6 +5,7 @@ import { makeFramePlan, transitionProgress } from './rotation/frame-plan';
 import { clamp } from './utils/numbers';
 import { safeFilenamePart, formatOutputFilename } from './utils/filename';
 import { validProjectUrl } from './projects/project-url';
+import type { Settings } from './types/settings';
 import { planBatchJobs, selectedBatchItems } from './batch/plan';
 import { createProjectStorage, projectNameFor, rememberProject } from './storage/project-library';
 
@@ -20,7 +21,7 @@ export function startApp(version) {
   const PROJECT_LIBRARY_KEY = `${SCRIPT_ID}:project-library:v1`;
   const POINTER_ID = 731945;
   const projectStorage = createProjectStorage(readStorage, writeStorage, PROJECT_NAMES_KEY, PROJECT_LIBRARY_KEY);
-  let settings = loadSettings();
+  let settings: Settings = loadSettings() as Settings;
   let panelVisible = true;
   let visibilityRevision = 0;
   let activeRun = null;
@@ -230,7 +231,7 @@ export function startApp(version) {
         }
       });
       if (!assignments.length) {
-        for (const material of clones) material.dispose?.();
+        for (const material of clones as unknown as any[]) material.dispose?.();
         if (strict) throw new Error('未找到可调整的白膜材质；已保留原站画面');
         return false;
       }
@@ -241,7 +242,7 @@ export function startApp(version) {
       for (const [mesh, original, adjusted] of assignments) {
         if (mesh.material === adjusted) mesh.material = original;
       }
-      for (const material of clones) material.dispose?.();
+      for (const material of clones as unknown as any[]) material.dispose?.();
       if (strict) throw error;
       return false;
     }
@@ -369,7 +370,7 @@ export function startApp(version) {
         requestRender();
       }
     };
-    const wrappedRender = function (renderScene, renderCamera, ...args) {
+    const wrappedRender = function (this: any, renderScene, renderCamera, ...args) {
       if (pending?.armed && renderScene === scene && renderCamera === camera) {
         try {
           applyTransparency();
@@ -377,7 +378,7 @@ export function startApp(version) {
           pending.observed = true;
         } catch (error) { fail(error); }
       }
-      return originalRender.call(this, renderScene, renderCamera, ...args);
+      return originalRender.call(this as any, renderScene, renderCamera, ...args);
     };
     const release = () => {
       if (released) return;
@@ -451,7 +452,7 @@ export function startApp(version) {
 
   function checkFrameEntry() {
     try {
-      const canvas = findViewerCanvas();
+      const canvas = findViewerCanvas() as HTMLElement | null;
       if (!canvas) throw new Error('请先打开一个已加载的模型');
       const binding = findRenderContext(canvas);
       const view = snapshotView(binding);
@@ -970,8 +971,8 @@ export function startApp(version) {
       job.error = error;
       // 暂停原有 await 链，保留同一个 Blob；成功保存后从此处继续批量队列。
       return await new Promise((resolve, reject) => {
-        job.resolve = resolve;
-        job.reject = reject;
+        (job as any).resolve = resolve;
+        (job as any).reject = reject;
         pendingSave = job;
         showSaveRecovery(job);
       });
@@ -1138,13 +1139,13 @@ export function startApp(version) {
       const stream = await navigator.mediaDevices.getDisplayMedia({
         video: {
           frameRate: { ideal: fps, max: fps },
-          cursor: 'never',
-        },
+          cursor: 'never' as any,
+        } as any,
         audio: false,
         preferCurrentTab: true,
         selfBrowserSurface: 'include',
         surfaceSwitching: 'exclude',
-      });
+      } as any);
       const track = stream.getVideoTracks()[0];
       const trackSettings = track?.getSettings?.() || {};
       if (trackSettings.displaySurface && trackSettings.displaySurface !== 'browser') {
@@ -1191,12 +1192,12 @@ export function startApp(version) {
         video.cancelVideoFrameCallback(frame);
         clearTimeout(timer);
         task?.cleanups.delete(cancel);
-        if (error) reject(error); else resolve();
+        if (error) reject(error); else resolve(undefined);
       };
       const cancel = () => finish(new DOMException('用户已停止导出', 'AbortError'));
       task?.cleanups.add(cancel);
       timer = setTimeout(() => finish(new Error('等待共享标签页新画面超时，请回到当前标签页')), 15000);
-      frame = video.requestVideoFrameCallback(() => finish());
+      frame = video.requestVideoFrameCallback(() => finish(undefined));
     });
     throwIfCancelled();
   }
@@ -1233,7 +1234,7 @@ export function startApp(version) {
     const accelerationModes = ['prefer-hardware', 'no-preference', 'prefer-software'];
     for (const hardwareAcceleration of accelerationModes) {
       for (const codec of codecs) {
-        const config = {
+        const config: any = {
           codec,
           width,
           height,
@@ -1241,7 +1242,7 @@ export function startApp(version) {
           framerate: fps,
           hardwareAcceleration,
           latencyMode: 'quality',
-          avc: { format: 'avc' },
+          avc: { format: 'avc' as any },
         };
         const support = await VideoEncoder.isConfigSupported(config);
         if (support.supported) return support.config;
@@ -1267,7 +1268,7 @@ export function startApp(version) {
       return out;
     };
     const u16 = value => new Uint8Array([value >>> 8 & 255, value & 255]);
-    const str = value => Uint8Array.from(value, char => char.charCodeAt(0));
+    const str = (value: string) => Uint8Array.from(value, char => char.charCodeAt(0));
     const zero = length => new Uint8Array(length);
     const atom = (type, ...parts) => {
       const data = bytes(...parts);
@@ -1302,7 +1303,7 @@ export function startApp(version) {
     return new Blob([ftyp, u32(total + 8), str('mdat'), ...samples, moov], { type: 'video/quicktime' });
   }
 
-  async function prepareRecording(canvas, options = {}) {
+  async function prepareRecording(canvas: any, options: any = {}) {
     if (!settings.recordEnabled && !options.forceRecord) return null;
     requireCanvasRecording();
     if (settings.transparentOutput) {
@@ -1353,14 +1354,14 @@ export function startApp(version) {
       outputFilename: options.outputFilename || null,
       outputTarget: options.outputTarget || null,
     };
-    session.encoder = new VideoEncoder({
+    (session as any).encoder = new VideoEncoder({
       output: (chunk, metadata) => muxer.addVideoChunk(chunk, metadata),
       error: (error) => {
         session.encoderError = error;
         console.error('[Tripo Rotation] H.264 编码失败', error);
       },
     });
-    session.encoder.configure(encoderConfig);
+    (session as any).encoder.configure(encoderConfig);
     return session;
   }
 
@@ -1373,7 +1374,7 @@ export function startApp(version) {
     if (!session?.started || session.finalized) return;
     if (!alreadyCopied) session.drawFrame();
     if (session.format === 'mov') {
-      const sample = await new Promise((resolve, reject) => session.canvas.toBlob(
+      const sample: Blob = await new Promise<Blob>((resolve, reject) => session.canvas.toBlob(
         blob => blob ? resolve(blob) : reject(new Error('透明 PNG 帧编码失败')), 'image/png'));
       session.sampleBytes += sample.size;
       if (session.sampleBytes > 1024 * 1024 * 1024) throw new Error('透明 MOV 超过 1GB 安全上限，请减少圈数或时长');
@@ -1394,7 +1395,7 @@ export function startApp(version) {
       });
     } finally { frame.close(); }
     session.frameIndex += 1;
-    if (session.encoder.encodeQueueSize > 8) await session.encoder.flush();
+    if (session.encoder.encodeQueueSize > 8) await (session as any).encoder.flush();
     if (session.encoderError) throw session.encoderError;
   }
 
@@ -1465,7 +1466,7 @@ export function startApp(version) {
     return new Promise((resolve) => {
       const timer = window.setTimeout(() => {
         if (run) run.timers.delete(timer);
-        resolve();
+        resolve(undefined);
       }, ms);
       if (run) run.timers.set(timer, resolve);
     });
@@ -1533,7 +1534,7 @@ export function startApp(version) {
     ui.videoBitrate.title = settings.transparentOutput ? '透明 MOV 为无损 PNG 帧，不使用 MP4 码率设置' : '';
   }
 
-  async function takeScreenshot(options = {}) {
+  async function takeScreenshot(options: any = {}) {
     throwIfCancelled();
     if (activeRun) {
       setStatus('请先停止当前旋转，再进行截图', 'warning');
@@ -1731,7 +1732,7 @@ export function startApp(version) {
     }
   }
 
-  async function handleRotationClick(mode) {
+  async function handleRotationClick(mode: any) {
     sanitizeSettingsFromUI();
     if (!settings.recordEnabled) {
       await startRotation(mode);
@@ -1811,7 +1812,7 @@ export function startApp(version) {
     if (!projectName) return;
     throwIfCancelled();
 
-    let outputTarget = { kind: 'download' };
+    let outputTarget: any = { kind: 'download' };
     let tabCapture = null;
     let batchState = null;
     const originalMaterial = currentMaterial();
@@ -1897,7 +1898,7 @@ export function startApp(version) {
     if (settings.studioLighting) applyLightingPreset();
     const solidApplied = applySolidLook();
     if (statusIsSticky) return;
-    const canvas = findViewerCanvas();
+    const canvas = findViewerCanvas() as HTMLElement | null;
     if (!canvas) {
       setStatus('等待模型预览器加载…', 'warning');
       return;
@@ -2002,7 +2003,7 @@ export function startApp(version) {
   async function nextRenderedFrame(task = activeTask) {
     throwIfCancelled(task);
     await new Promise(resolve => {
-      const frame = requestAnimationFrame(() => { task?.frames.delete(frame); resolve(); });
+      const frame = requestAnimationFrame(() => { task?.frames.delete(frame); resolve(undefined); });
       task?.frames.set(frame, resolve);
     });
     throwIfCancelled(task);
@@ -2079,7 +2080,7 @@ export function startApp(version) {
     }
   }
 
-  async function animateDrag(run, durationMs, totalDistance, progressAt) {
+  async function animateDrag(run: any, durationMs: number, totalDistance: number, progressAt: (elapsed: number) => number) {
     if (run.recording) throw new Error('禁止通过模拟拖拽录制视频');
 
     return new Promise((resolve) => {
@@ -2123,7 +2124,7 @@ export function startApp(version) {
     await sleep(settings.settleDuration * 1000, run);
   }
 
-  async function restoreViewAfterRotation(canvas, totalDistance) {
+  async function restoreViewAfterRotation(canvas: any, totalDistance: number) {
     const rect = canvas.getBoundingClientRect();
     const startX = rect.left + rect.width * 0.5;
     const y = rect.top + rect.height * 0.5;
@@ -2144,7 +2145,7 @@ export function startApp(version) {
     }
   }
 
-  async function startRotation(mode, options = {}) {
+  async function startRotation(mode: any, options: any = {}) {
     throwIfCancelled();
     if (activeRun) {
       setStatus('旋转正在运行；按 Esc 可停止', 'warning');
@@ -2207,8 +2208,8 @@ export function startApp(version) {
       const durationSeconds = settings.uniformDuration * settings.uniformTurns;
       const durationMs = durationSeconds * 1000;
       totalDistance = pixelsPerTurn * settings.uniformTurns;
-      completed = await animateDrag(run, durationMs, totalDistance,
-        (elapsed) => elapsed / durationSeconds);
+      completed = Boolean(await animateDrag(run, durationMs, totalDistance,
+        (elapsed) => elapsed / durationSeconds));
       } else {
       setStatus('加速转场旋转中…', 'running');
       const a = settings.accelerationDuration;
@@ -2216,9 +2217,9 @@ export function startApp(version) {
       const d = settings.decelerationDuration;
       const durationMs = (a + c + d) * 1000;
       totalDistance = pixelsPerTurn * settings.transitionTurns;
-      completed = await animateDrag(run, durationMs,
+      completed = Boolean(await animateDrag(run, durationMs,
         totalDistance,
-        (elapsed) => transitionProgress(elapsed, a, c, d));
+        (elapsed) => transitionProgress(elapsed, a, c, d)));
       }
 
       if (!completed || activeRun !== run) return;
@@ -2586,7 +2587,8 @@ export function startApp(version) {
 
   document.addEventListener('keydown', (event) => {
     const target = event.composedPath?.()[0] || event.target;
-    const editing = target && (target.matches?.('input, textarea, select') || target.isContentEditable);
+    const editableTarget = target instanceof HTMLElement ? target : null;
+    const editing = editableTarget && (editableTarget.matches('input, textarea, select') || editableTarget.isContentEditable);
 
     if (event.key === 'Escape' && (activeRun || activeTask || batchRunning)) {
       event.preventDefault();

@@ -5,7 +5,8 @@ import { readFile } from 'node:fs/promises';
 import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
 
-const source = await readFile(new URL('../src/app.js', import.meta.url), 'utf8').then(text => text.replace(/\r\n/g, '\n'));
+const source = await readFile(new URL('../src/app.ts', import.meta.url), 'utf8').then(text => text.replace(/\r\n/g, '\n'));
+const harnessSource = source.replace("import type { Settings } from './types/settings';\n", '');
 const names = ['runExportAction','animateDrag','stopRotation','throwIfCancelled','nextRenderedFrame','sleep',
   'exportAll','takeScreenshot','startRotation','hideAxisOverlay','createCanvasFrameSource','createFrameLock',
   'switchMaterial','switchWireframe','waitForTabFrame','createTabCapture','handleScreenshotClick',
@@ -17,9 +18,9 @@ const overrides = ['setStatus','sanitizeSettingsFromUI','requestProjectName','pl
   'createViewerBackgroundCanvas','createFrameLock','createCanvasFrameSource','saveBlob','chooseSingleFile',
   'requestBatchCaptureStart','createTabCapture'];
 // Transitional JS integration harness. TS modules are tested via exports in logic.test.mjs.
-assert(source.includes("  const host = document.createElement('div');"));
-assert(source.includes('export function startApp(version) {'));
-const harness = source.slice(0, source.indexOf("  const host = document.createElement('div');"))
+assert(harnessSource.includes("  const host = document.createElement('div');"));
+assert(harnessSource.includes('export function startApp(version) {'));
+const harness = harnessSource.slice(0, harnessSource.indexOf("  const host = document.createElement('div');"))
   .replace('export function startApp(version) {', 'function startApp(version) {') + `
   ui = {saveRecoveryModal:{hidden:true}, saveRecoveryInfo:{}, saveRetry:{}, saveAs:{}, saveDiscard:{}};
   globalThis.api = { ${names.join(',')},
@@ -32,7 +33,7 @@ const harness = source.slice(0, source.indexOf("  const host = document.createEl
 }
 startApp("test");`;
 const buildHarness = async minify => (await build({
-  stdin: { contents: harness, resolveDir: fileURLToPath(new URL('../src/', import.meta.url)) },
+  stdin: { contents: harness, resolveDir: fileURLToPath(new URL('../src/', import.meta.url)), loader: 'ts' },
   bundle: true, write: false, minify, format: 'iife', target: ['chrome109'],
   define: { __SCRIPT_VERSION__: '"test"' },
 })).outputFiles[0].text;

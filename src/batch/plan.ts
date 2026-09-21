@@ -1,4 +1,4 @@
-import type { ExportKey } from '../types/settings';
+import type { ExportItem, ExportKey } from '../types/settings';
 
 export interface BatchItem {
   key: ExportKey;
@@ -9,9 +9,7 @@ export interface BatchSelection {
   batchWireframeVariants: boolean;
 }
 
-export interface BatchJob extends BatchItem {
-  wireframe: boolean;
-}
+export type BatchJob<T extends BatchItem = ExportItem> = T & { wireframe: boolean };
 
 export function selectedBatchItems<T extends BatchItem>(
   items: readonly T[], selectedKeys: readonly ExportKey[],
@@ -22,7 +20,7 @@ export function selectedBatchItems<T extends BatchItem>(
 
 export function planBatchJobs<T extends BatchItem>(
   items: readonly T[], settings: BatchSelection, wireframeAvailable: boolean,
-): BatchJob[] {
+): BatchJob<T>[] {
   const selected = selectedBatchItems(items, settings.batchItems);
   return selected.flatMap(item => settings.batchWireframeVariants && wireframeAvailable
     ? [{ ...item, wireframe: false }, { ...item, wireframe: true }]

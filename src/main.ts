@@ -1,4 +1,4 @@
-import { startApp } from './app.js';
+import { startApp } from './app';
 import { ensureRuntimeAvailable } from './runtime/runtime-gate';
 
 async function main(): Promise<void> {
