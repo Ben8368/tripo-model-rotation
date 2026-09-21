@@ -11,7 +11,8 @@ for (const minify of [false, true]) {
         export { normalizeSettings, DEFAULT_SETTINGS } from './settings/settings';
         export { makeFramePlan, transitionProgress } from './rotation/frame-plan';
         export { formatOutputFilename } from './utils/filename';
-        export { validProjectUrl } from './projects/project-url';`,
+        export { validProjectUrl } from './projects/project-url';
+        export { createProjectStorage, parseProjectNames, parseProjectLibrary, projectNameFor, rememberProject } from './storage/project-library';`,
       resolveDir: fileURLToPath(new URL('../src/', import.meta.url)),
     },
     bundle: true, write: false, minify, format: 'esm', target: ['chrome109'],
@@ -87,5 +88,25 @@ for (const minify of [false, true]) {
       assert.equal(api.validProjectUrl(value, id), null);
     }
     assert.equal(api.validProjectUrl(base, 'other-id'), null);
+  });
+  test(`${variant}: project-library storage parsing drops invalid records and keeps newest first`, () => {
+    const id = '12345678-1234-4123-8123-123456789abc';
+    const url = `https://studio.tripo3d.ai/workspace/generate/${id}`;
+    assert.deepEqual(api.parseProjectNames('{"a":" Name "}'), { a: ' Name ' });
+    assert.deepEqual(api.parseProjectNames('[]'), {});
+    const records = api.parseProjectLibrary(JSON.stringify([
+      { id, name: ' First ', url, updatedAt: '5' },
+      { id: 'bad', name: 'Bad', url, updatedAt: 9 },
+      { id, name: 'Newest', url, updatedAt: 8 },
+    ]));
+    assert.deepEqual(records.map(record => [record.name, record.updatedAt]), [['Newest', 8], ['First', 5]]);
+    const writes = [];
+    const storage = api.createProjectStorage(() => '{"a":"  Demo  "}', (key, value) => (writes.push([key, value]), true), 'names', 'library');
+    assert.equal(api.projectNameFor(storage, 'a'), 'Demo');
+    assert.equal(storage.saveNames({ a: 'Saved' }), true);
+    assert.equal(storage.saveLibrary([]), true);
+    assert.deepEqual(writes, [['names', '{\"a\":\"Saved\"}'], ['library', '[]']]);
+    assert.deepEqual(api.rememberProject(records, id, 'Replacement', `${url}?ignored=1`, 12)[0],
+      { id, name: 'Replacement', url, updatedAt: 12 });
   });
 }

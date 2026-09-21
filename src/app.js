@@ -5,6 +5,7 @@ import { makeFramePlan, transitionProgress } from './rotation/frame-plan';
 import { clamp } from './utils/numbers';
 import { safeFilenamePart, formatOutputFilename } from './utils/filename';
 import { validProjectUrl } from './projects/project-url';
+import { createProjectStorage, projectNameFor, rememberProject } from './storage/project-library';
 
 /** @param {string} version */
 export function startApp(version) {
@@ -17,6 +18,7 @@ export function startApp(version) {
   const PROJECT_NAMES_KEY = `${SCRIPT_ID}:project-names:v1`;
   const PROJECT_LIBRARY_KEY = `${SCRIPT_ID}:project-library:v1`;
   const POINTER_ID = 731945;
+  const projectStorage = createProjectStorage(readStorage, writeStorage, PROJECT_NAMES_KEY, PROJECT_LIBRARY_KEY);
   let settings = loadSettings();
   let panelVisible = true;
   let visibilityRevision = 0;
@@ -502,46 +504,29 @@ export function startApp(version) {
     return match?.[1] || location.pathname.split('/').filter(Boolean).pop() || 'unknown-project';
   }
 
-  function loadProjectNames() {
-    try {
-      const names = JSON.parse(readStorage(PROJECT_NAMES_KEY) || '{}');
-      return names && typeof names === 'object' ? names : {};
-    } catch {
-      return {};
-    }
-  }
-
   function getProjectName() {
-    return String(loadProjectNames()[currentProjectId()] || '').trim();
+    return projectNameFor(projectStorage, currentProjectId());
   }
 
   function saveProjectName(name) {
     const value = String(name || '').trim();
     if (!value) return false;
-    const names = loadProjectNames();
+    const names = projectStorage.loadNames();
     names[currentProjectId()] = value;
-    writeStorage(PROJECT_NAMES_KEY, JSON.stringify(names));
+    projectStorage.saveNames(names);
     rememberNamedProject(value);
     if (ui?.projectName) ui.projectName.value = value;
     return true;
   }
 
   function loadProjectLibrary() {
-    try {
-      const records = JSON.parse(readStorage(PROJECT_LIBRARY_KEY) || '[]');
-      if (!Array.isArray(records)) return [];
-      return records.filter(record => record && typeof record.name === 'string' && record.name.trim() &&
-        validProjectUrl(record.url, record.id)).sort((a, b) => (Number(b.updatedAt) || 0) - (Number(a.updatedAt) || 0));
-    } catch { return []; }
+    return projectStorage.loadLibrary();
   }
 
   function rememberNamedProject(name) {
     const id = currentProjectId();
-    const url = validProjectUrl(location.href, id);
-    if (!url) return;
-    const records = loadProjectLibrary().filter(record => record.id !== id);
-    records.unshift({ id, name, url, updatedAt: Date.now() });
-    writeStorage(PROJECT_LIBRARY_KEY, JSON.stringify(records));
+    const records = rememberProject(loadProjectLibrary(), id, name, location.href, Date.now());
+    projectStorage.saveLibrary(records);
   }
 
   function projectSwitchBlocked() {
@@ -596,10 +581,10 @@ export function startApp(version) {
   function deleteProjectName(id) {
     if (projectSwitchBlocked()) return;
     if (!window.confirm('仅删除本浏览器保存的项目命名，不会删除 Tripo 工程或已导出的文件。继续？')) return;
-    const names = loadProjectNames();
+    const names = projectStorage.loadNames();
     delete names[id];
-    writeStorage(PROJECT_NAMES_KEY, JSON.stringify(names));
-    writeStorage(PROJECT_LIBRARY_KEY, JSON.stringify(loadProjectLibrary().filter(record => record.id !== id)));
+    projectStorage.saveNames(names);
+    projectStorage.saveLibrary(loadProjectLibrary().filter(record => record.id !== id));
     syncProjectNameField();
     renderProjectLibrary();
   }

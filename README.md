@@ -119,7 +119,7 @@ Tripo Studio 3D 模型旋转、录屏与批量导出用户脚本。
 - `src/types/settings.ts`：设置、导出类型、材质和逐帧计划的数据契约。
 - `src/settings/`：默认配置、配置规范化和导出选项。
 - `src/rotation/frame-plan.ts`：转场进度和确定性逐帧轨迹。
-- `src/projects/project-url.ts`、`src/utils/`：工程链接校验、文件名和数值工具。
+- `src/projects/project-url.ts`、`src/storage/`、`src/utils/`：工程链接校验、工程记录存储解析、文件名和数值工具。
 - `src/app.js`：尚未迁移的页面集成代码，包括 DOM UI、Tripo/Tres 适配、录制、保存与取消流程。
 - `src/userscript.meta.txt`：用户脚本元数据模板。
 - `package.json`：唯一版本来源。
@@ -174,7 +174,7 @@ mp4-muxer 5.2.2 已被上游标记为 deprecated，本次保留原版本以避�
 
 项目始终以用户脚本形式使用。TS 类型仅用于开发期检查，esbuild 最终仍输出浏览器可执行的 JavaScript IIFE，安装入口、远程核心和 standalone 三种产物的关系保持不变。
 
-第一阶段已将启动门禁、配置规范化、导出选项、旋转计划、文件名及工程链接校验迁入严格检查的 TS 模块。网络 JSON 和本地配置以 `unknown` 进入边界，再执行运行时校验；类型不能代替页面兼容性及浏览器能力检查。
+第一阶段已将启动门禁、配置规范化、导出选项、旋转计划、文件名、工程链接校验及工程记录存储解析迁入严格检查的 TS 模块。网络 JSON 和本地配置以 `unknown` 进入边界，再执行运行时校验；类型不能代替页面兼容性及浏览器能力检查。
 
 `tsconfig.json` 使用 `strict: true`。为了分阶段迁移，当前同时使用 `allowJs: true`、`checkJs: false`：`src/app.js` 仍未受严格类型检查覆盖。不要把类型检查通过理解为整个应用已经类型化，也不要用 `@ts-nocheck` 或大范围 `any` 迁移剩余代码。
 
