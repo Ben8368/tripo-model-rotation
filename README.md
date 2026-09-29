@@ -12,6 +12,8 @@ Tripo Studio 3D 模型旋转、录屏与批量导出用户脚本。
 - 线框版本批量导出
 - 明亮棚拍光照和白膜提亮
 - 按工程名称管理导出文件
+- 导出视角还原点
+- 跨多个工程的断点续跑批量导出
 
 ## 安装
 
@@ -33,14 +35,14 @@ Tripo Studio 3D 模型旋转、录屏与批量导出用户脚本。
 ```text
 @updateURL   https://raw.githubusercontent.com/Ben8368/tripo-model-rotation/master/tripo-model-rotation.user.js
 @downloadURL https://raw.githubusercontent.com/Ben8368/tripo-model-rotation/master/tripo-model-rotation.user.js
-@require     https://raw.githubusercontent.com/Ben8368/tripo-model-rotation/v3.9.10/dist/tripo-core.min.js
+@require     https://raw.githubusercontent.com/Ben8368/tripo-model-rotation/v3.12.6/dist/tripo-core.min.js
 ```
 
 根目录脚本是很小的安装与更新入口，业务核心由 `@require` 从同一 GitHub 仓库的不可变版本标签加载。油猴管理器会缓存远程依赖，不需要注册额外 CDN 账号。
 
 后续发布新版本时，更新 `package.json` 的版本号并执行 `npm run check`，构建器会让入口自动指向对应的 `v版本号` 标签。必须同时推送 `master` 和该版本标签，否则新入口无法取得核心文件。核心每次页面加载还会请求 `master/runtime-status.json`：仓库公开、状态启用且当前版本不低于 `minimumVersion` 时才启动，仓库改为私有后匿名请求失败，缓存核心在刷新后也会停止运行。Tampermonkey 或 Violentmonkey 会按自己的更新周期检查入口；也可以在用户脚本管理器中手动执行“检查更新”。
 
-当前版本：`3.9.10`
+当前版本：`3.12.6`
 
 `minimumVersion` 必须是稳定版本格式 `major.minor.patch`（例如 `3.9.5`），按三个数值段比较；缺失或格式无效时拒绝启动。该检查从 3.9.6 起生效，不能追溯修复已缓存的 3.9.5 或更早核心。当前最低版本配置保持 3.9.5，不随本次修复自动提高。
 
@@ -89,6 +91,13 @@ Tripo Studio 3D 模型旋转、录屏与批量导出用户脚本。
 - 可选的线框版本
 
 支持目录选择的浏览器会将批量文件保存到指定目录，并自动处理重名文件。
+
+### 跨工程批量导出
+
+- 每次单项或一键导出会记录当前工程的相机视角、画布尺寸和导出设置。
+- 在资产卡片上勾选多个模型后，点击“跨工程批量导出”，选择一次目标文件夹即可依次处理。
+- 任务状态和文件夹句柄保存在本地，页面跳转或中断后可继续；已完成文件不会重复导出。
+- 跨工程严格逐帧导出要求输出范围为“仅模型画面”，并要求每个模型已有有效导出还原点。
 
 ## 环境要求
 

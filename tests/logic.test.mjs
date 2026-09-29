@@ -47,7 +47,7 @@ for (const minify of [false, true]) {
     const defaults = api.normalizeSettings(null);
     const settings = api.normalizeSettings({ configVersion: 1, direction: '1', recordingFps: 999,
       uniformDuration: 'bad', autoHide: 'false', transparentOutput: true, recordingScope: 'other' });
-    assert.equal(settings.configVersion, 7);
+    assert.equal(settings.configVersion, 8);
     assert.equal(settings.direction, 1);
     assert.equal(settings.recordingFps, 120);
     assert.equal(settings.uniformDuration, defaults.uniformDuration);

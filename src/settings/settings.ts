@@ -5,7 +5,7 @@ import { clamp } from '../utils/numbers';
 type KeysOfType<T, V> = { [K in keyof T]: T[K] extends V ? K : never }[keyof T];
 
 export const DEFAULT_SETTINGS: Readonly<Omit<Settings, 'batchItems'>> & { readonly batchItems: readonly ExportKey[] } = Object.freeze({
-  configVersion: 7,
+  configVersion: 8,
   direction: -1,
   pixelsPerTurnRatio: 1,
   uniformTurns: 1,

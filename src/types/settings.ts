@@ -51,3 +51,37 @@ export interface FramePlan {
   endAngle: number;
   movingFrames: number;
 }
+
+export interface ExportRestorePoint {
+  id: string;
+  projectId: string;
+  url: string;
+  projectName?: string;
+  createdAt: string;
+  kind: ExportKind | 'manual' | 'batch';
+  itemCount?: number;
+  cameraType?: string;
+  canvasCssSize?: readonly [number, number];
+  view: Record<string, unknown>;
+  settings: Partial<Settings>;
+}
+
+export interface SelectedProjectAsset {
+  projectId: string;
+  url: string;
+  label?: string;
+}
+
+export interface MultiProjectBatchSession {
+  id: string;
+  status: 'running' | 'paused' | 'cancelled';
+  startedAt: string;
+  points: ExportRestorePoint[];
+  itemKeys: ExportKey[];
+  includeWireframe: boolean;
+  settings: Settings;
+  pointIndex: number;
+  jobIndex: number;
+  completedFiles: number;
+  error: string;
+}
