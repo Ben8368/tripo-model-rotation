@@ -3,6 +3,7 @@ import * as Mp4Muxer from 'mp4-muxer';
 import { DEFAULT_SETTINGS as DEFAULTS, normalizeSettings } from './settings/settings';
 import { MATERIALS, EXPORT_KINDS, EXPORT_ITEMS } from './settings/catalog';
 import { makeFramePlan, transitionProgress } from './rotation/frame-plan';
+import { resolveRenderContext, activeCamera, unref, FrameEntryError } from './rotation/render-context';
 import { clamp } from './utils/numbers';
 import { safeFilenamePart, formatOutputFilename } from './utils/filename';
 import { validProjectUrl } from './projects/project-url';
@@ -40,50 +41,8 @@ export function startApp(version) {
   let ui = null;
 
   // 录制只接受真实 Tres 上下文。没有入口时禁止回退到模拟鼠标。
-  function unref(value) {
-    return value?.__v_isRef ? value.value : value;
-  }
-
   function findRenderContext(canvas) {
-    const queue = [];
-    for (let element = canvas; element; element = element.parentElement) {
-      queue.push(element.__vueParentComponent, element._vnode, element.__vue_app__?._instance);
-    }
-    const seen = new Set();
-    for (let index = 0; index < queue.length && index < 30000; index += 1) {
-      let value;
-      try { value = unref(queue[index]); } catch { continue; }
-      if (!value || typeof value !== 'object' || seen.has(value)) continue;
-      seen.add(value);
-      try {
-        const manager = unref(value.renderer);
-        if (unref(manager?.instance)?.domElement === canvas &&
-            unref(value.scene)?.isScene && unref(value.camera?.activeCamera)?.isCamera) {
-          const controls = unref(value.controls);
-          const camera = unref(value.camera.activeCamera);
-          if (controls?.camera !== camera || typeof controls.rotateTo !== 'function' ||
-              typeof controls.getSpherical !== 'function' || typeof manager.onRender !== 'function' ||
-              typeof manager.loop?.onBeforeLoop !== 'function') continue;
-          return { context: value, manager, renderer: unref(manager.instance),
-            scene: unref(value.scene), camera, controls, canvas };
-        }
-        // Only Vue component/vnode edges and exposed context; never walk assets,
-        // WebGL internals, user data, or the entire window object.
-        for (const key of ['component', 'subTree', 'parent', 'exposed', 'context', 'ctx', 'setupState', 'refs']) {
-          if (value[key]) queue.push(value[key]);
-        }
-        if (Array.isArray(value.children)) queue.push(...value.children);
-        if (value.suspense?.activeBranch) queue.push(value.suspense.activeBranch);
-        for (const bag of [value.exposed, value.setupState, value.refs, value.provides]) {
-          if (bag && typeof bag === 'object') {
-            for (const key of Reflect.ownKeys(bag)) {
-              try { queue.push(bag[key]); } catch { /* optional Vue getter */ }
-            }
-          }
-        }
-      } catch { /* unmounted Vue node: continue to other candidates */ }
-    }
-    throw new Error('未找到可靠的相机/渲染入口。已阻止旧式拖动录制；请点击“检查逐帧入口”查看诊断');
+    return resolveRenderContext(canvas);
   }
 
   function restoreOriginalLighting() {
@@ -278,7 +237,7 @@ export function startApp(version) {
   function applyView(binding, view, angle = 0) {
     const { controls, camera, canvas } = binding;
     if (!canvas.isConnected || canvas.width !== view.width || canvas.height !== view.height ||
-        unref(binding.context.camera.activeCamera) !== camera || unref(binding.context.scene) !== binding.scene) {
+        activeCamera(binding.context) !== camera || unref(binding.context.scene) !== binding.scene) {
       throw new Error('预览器尺寸、相机或工程已变化，请保持窗口尺寸不变后重新导出');
     }
     // All targets are absolute, transition=false. Never integrate pointer deltas
@@ -463,7 +422,14 @@ export function startApp(version) {
         controls: canvas.dataset.cameraControlsVersion, renderMode: binding.manager.mode,
         camera: binding.camera.type, width: view.width, height: view.height,
       });
-    } catch (error) { setStatus(`逐帧入口检查失败：${error.message}`, 'error'); }
+    } catch (error) {
+      // Only structural counters and known capability names; no Vue state or account data.
+      console.warn('[Tripo Rotation] 逐帧入口诊断', {
+        version: SCRIPT_VERSION,
+        ...(error instanceof FrameEntryError ? error.diagnostics : { stage: '视角读取或画布检查失败' }),
+      });
+      setStatus(`逐帧入口检查失败：${error.message}`, 'error');
+    }
   }
 
   function readStorage(key) {
