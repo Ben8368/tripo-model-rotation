@@ -3,8 +3,29 @@ export function unref(value: any): any {
   return value?.__v_isRef ? value.value : value;
 }
 
+/** Vue's toRaw semantics, also accepting refs, without bundling a second Vue runtime. */
+export function nativeObject(value: any): any {
+  const seen = new Set();
+  for (let depth = 0; depth < 32; depth += 1) {
+    if (!value || typeof value !== 'object') return value;
+    if (seen.has(value)) return undefined;
+    seen.add(value);
+    const next = value.__v_isRef ? value.value : value.__v_raw;
+    if (next === undefined && !value.__v_isRef) return value;
+    value = next;
+  }
+  return undefined;
+}
+
 export function activeCamera(context: any): any {
-  return unref(unref(context?.camera)?.activeCamera);
+  return nativeObject(unref(context?.camera)?.activeCamera);
+}
+
+// camera-controls stores its camera in _camera; prefer its public accessor when
+// present. Never substitute _camera for a public accessor pointing elsewhere.
+export function controlsCamera(controls: any): any {
+  controls = nativeObject(controls);
+  return nativeObject(controls?.camera ?? controls?._camera);
 }
 
 export interface EntryDiagnostics {
@@ -14,6 +35,8 @@ export interface EntryDiagnostics {
   matchingCanvas: number;
   searchLimited: boolean;
   missing: string[];
+  cameraBinding?: 'missing' | 'not-camera' | 'different-camera' | 'same-native-camera';
+  cameraAccessor?: 'camera' | '_camera' | 'none';
 }
 
 export class FrameEntryError extends Error {
@@ -85,17 +108,27 @@ export function resolveRenderContext(canvas: any) {
     diagnostics.visited += 1;
     try {
       const manager = unref(value.renderer);
-      const renderer = unref(manager?.instance);
+      const renderer = nativeObject(manager?.instance);
       if (renderer?.domElement) diagnostics.contexts += 1;
       if (renderer?.domElement === canvas) {
         diagnostics.matchingCanvas += 1;
-        const scene = unref(value.scene);
+        const scene = nativeObject(value.scene);
         const camera = activeCamera(value);
-        const controls = unref(value.controls);
+        const controls = nativeObject(value.controls);
+        const controlledCamera = controlsCamera(controls);
+        const cameraBinding = !controlledCamera ? 'missing'
+          : !controlledCamera.isCamera ? 'not-camera'
+          : controlledCamera !== camera ? 'different-camera' : 'same-native-camera';
+        const cameraAccessor = controls?.camera != null ? 'camera'
+          : controls?._camera != null ? '_camera' : 'none';
         const missing: string[] = [];
         if (!scene?.isScene) missing.push('场景');
         if (!camera?.isCamera) missing.push('活动相机');
-        if (!controls || controls.camera !== camera || !camera) missing.push('绑定活动相机的控制器');
+        if (cameraBinding !== 'same-native-camera') {
+          missing.push(cameraBinding === 'different-camera'
+            ? '绑定活动相机的控制器（控制器指向另一台相机）'
+            : '绑定活动相机的控制器（无法读取控制器相机）');
+        }
         for (const method of CONTROL_METHODS) {
           if (typeof controls?.[method] !== 'function') missing.push(`controls.${method}`);
         }
@@ -105,7 +138,11 @@ export function resolveRenderContext(canvas: any) {
         if (typeof manager.invalidate !== 'function') missing.push('重绘入口');
         if (manager.mode === 'manual' && typeof manager.advance !== 'function') missing.push('手动重绘入口');
         if (!missing.length) return { context: value, manager, renderer, scene, camera, controls, canvas };
-        if (!diagnostics.missing.length || missing.length < diagnostics.missing.length) diagnostics.missing = missing;
+        if (!diagnostics.missing.length || missing.length < diagnostics.missing.length) {
+          diagnostics.missing = missing;
+          diagnostics.cameraBinding = cameraBinding;
+          diagnostics.cameraAccessor = cameraAccessor;
+        }
         // An incomplete candidate can still expose the live context below it.
       }
     } catch { /* A rejected candidate must not hide its other Vue edges. */ }

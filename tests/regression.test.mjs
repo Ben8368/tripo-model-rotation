@@ -10,7 +10,7 @@ const harnessSource = source.replace("import type { Settings } from './types/set
 const names = ['runExportAction','animateDrag','stopRotation','throwIfCancelled','nextRenderedFrame','sleep',
   'exportAll','takeScreenshot','startRotation','hideAxisOverlay','createCanvasFrameSource','createFrameLock',
   'switchMaterial','switchWireframe','waitForTabFrame','createTabCapture','handleScreenshotClick',
-  'saveBlob','resumePendingSave','discardPendingSave','handleBeforeUnload'];
+  'saveBlob','resumePendingSave','discardPendingSave','handleBeforeUnload','snapshotView','applyView'];
 const overrides = ['setStatus','sanitizeSettingsFromUI','requestProjectName','plannedExportItems',
   'currentMaterial','toggleIsOn','findWireframeButton','findViewerCanvas','snapshotView','findRenderContext',
   'showPanel','switchMaterial','switchWireframe','buildOutputFilename','takeScreenshot','applyView',
@@ -225,6 +225,43 @@ for (const [variant, code] of [['unminified',plain],['minified',compiled]]) {
     assert.equal(off,2);lock.release();assert.equal(off,2);
     assert.throws(()=>api.createFrameLock({}, {signature:[2]}),/不一致/);assert.equal(hidden,false);
     return assert.rejects(waiting,/取消/);
+  });
+  test(`${variant}: native frame lock accepts Vue-wrapped render arguments and rejects camera changes`, async () => {
+    const {api,context}=setup(code);
+    context.document.addEventListener=()=>{};context.document.removeEventListener=()=>{};
+    const proxy=target=>new Proxy(target,{
+      get(target,key,receiver){return key==='__v_raw'?target:Reflect.get(target,key,receiver);},
+    });
+    const canvas={isConnected:true,width:640,height:480};
+    const camera={isCamera:true,zoom:1,matrixWorld:{elements:[0]},projectionMatrix:{elements:[1]},
+      updateMatrixWorld(){}};
+    const vector={toArray:()=>[0,0,0]};let theta=0;
+    const controls={camera:proxy(camera),enabled:true,stop(){},
+      getSpherical:()=>({theta,phi:1}),getPosition:()=>vector,getTarget:()=>vector,getFocalOffset:()=>vector,
+      setLookAt(){theta=0;},setFocalOffset(){},zoomTo(){},rotateTo(angle){theta=angle;},
+      update(){camera.matrixWorld.elements[0]=theta;}};
+    const scene={};const renderer={render(){}};const originalRender=renderer.render;
+    let before,after,off=0;
+    const manager={mode:'on-demand',invalidate(){
+      before();
+      // A different camera, even with the same matrices, must not be captured.
+      renderer.render(proxy(scene),{...camera});after();
+      renderer.render(proxy(scene),proxy(camera));after();
+    },loop:{onBeforeLoop(cb){before=cb;return {off(){off++;}};}},
+    onRender(cb){after=cb;return {off(){off++;}};}};
+    const binding={canvas,camera,controls,scene,renderer,manager,context:{
+      camera:{activeCamera:{__v_isRef:true,value:proxy(camera)}},
+      scene:proxy(scene),controls:proxy(controls),
+    }};
+    api.override({findRenderContext:()=>binding,findAxisOverlay:()=>null});
+    const lock=api.createFrameLock(canvas,api.snapshotView(binding));
+    let copies=0;
+    const result=await bounded(lock.capture(0.5,signature=>{copies++;return [...signature];}));
+    assert.deepEqual(result,[0.5,1]);assert.equal(copies,1);
+    controls.camera={...camera};
+    await assert.rejects(bounded(lock.capture(1,()=>{copies++;})),/相机或工程已变化/);
+    assert.equal(copies,1);
+    lock.release();assert.equal(controls.enabled,true);assert.equal(renderer.render,originalRender);assert.equal(off,2);
   });
   test(`${variant}: stopping during an asynchronous PNG encode skips saving`,async()=>{
     const {api}=setup(code);let callback,saves=0;

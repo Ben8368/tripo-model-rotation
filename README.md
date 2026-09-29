@@ -33,14 +33,14 @@ Tripo Studio 3D 模型旋转、录屏与批量导出用户脚本。
 ```text
 @updateURL   https://raw.githubusercontent.com/Ben8368/tripo-model-rotation/master/tripo-model-rotation.user.js
 @downloadURL https://raw.githubusercontent.com/Ben8368/tripo-model-rotation/master/tripo-model-rotation.user.js
-@require     https://raw.githubusercontent.com/Ben8368/tripo-model-rotation/v3.9.9/dist/tripo-core.min.js
+@require     https://raw.githubusercontent.com/Ben8368/tripo-model-rotation/v3.9.10/dist/tripo-core.min.js
 ```
 
 根目录脚本是很小的安装与更新入口，业务核心由 `@require` 从同一 GitHub 仓库的不可变版本标签加载。油猴管理器会缓存远程依赖，不需要注册额外 CDN 账号。
 
 后续发布新版本时，更新 `package.json` 的版本号并执行 `npm run check`，构建器会让入口自动指向对应的 `v版本号` 标签。必须同时推送 `master` 和该版本标签，否则新入口无法取得核心文件。核心每次页面加载还会请求 `master/runtime-status.json`：仓库公开、状态启用且当前版本不低于 `minimumVersion` 时才启动，仓库改为私有后匿名请求失败，缓存核心在刷新后也会停止运行。Tampermonkey 或 Violentmonkey 会按自己的更新周期检查入口；也可以在用户脚本管理器中手动执行“检查更新”。
 
-当前版本：`3.9.9`
+当前版本：`3.9.10`
 
 `minimumVersion` 必须是稳定版本格式 `major.minor.patch`（例如 `3.9.5`），按三个数值段比较；缺失或格式无效时拒绝启动。该检查从 3.9.6 起生效，不能追溯修复已缓存的 3.9.5 或更早核心。当前最低版本配置保持 3.9.5，不随本次修复自动提高。
 
@@ -170,6 +170,14 @@ mp4-muxer 5.2.2 已被上游标记为 deprecated，本次保留原版本以避�
 
 不要移动或复用已经发布的版本标签。入口引用版本标签是为了让同一入口版本永久取得同一份核心文件，避免 `master` 更新或缓存造成入口与核心错配。
 
+### 3.9.10 相机身份校验兼容性
+
+- 统一解包 Vue ref / reactive / readonly 代理后比较原始相机、场景与渲染器，避免同一原始对象被误判为不同对象。
+- 优先使用 camera-controls 的公开 `camera`，仅在其缺失时读取 `_camera`；真实相机不一致时仍拒绝录制，不按 UUID 或矩阵近似放行。
+- 原生渲染回调使用同样的身份比较，每帧检查控制器是否被替换或重新绑定。
+- 导出失败也会输出结构化入口诊断，并区分“无法读取控制器相机”和“控制器指向另一台相机”。
+- 自动化覆盖代理相机识别、原生帧采集、错误相机拒绝及资源恢复。真实 Tripo 页面仍待验证：本机浏览器连接不可用，直接访问站点返回 403。
+
 ### 3.9.9 逐帧入口搜索与诊断
 
 - 搜索 Vue `provides` 的继承链与 Symbol 注入，支持嵌套 Fragment 和 ref 包装的相机管理器。
@@ -178,7 +186,7 @@ mp4-muxer 5.2.2 已被上游标记为 deprecated，本次保留原版本以避�
 - 检查失败时显示具体阶段与缺失能力；控制台仅输出结构计数和能力名称，不打印 Vue 状态或账号信息。
 - 自动化回归覆盖未压缩及压缩版本。真实 Tripo 页面验收尚未完成，不能仅凭这些测试确认截图中的现场故障已消除。
 
-本地验证请安装 `dist/tripo-model-rotation.standalone.user.js`；远程入口需发布 `v3.9.9` 标签后才可加载新核心。
+本地验证请安装 `dist/tripo-model-rotation.standalone.user.js`；远程入口需发布与当前版本对应的标签后才可加载新核心。
 
 ### TypeScript 迁移状态（已完成）
 

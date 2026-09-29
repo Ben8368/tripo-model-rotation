@@ -5,7 +5,7 @@ import { build } from 'esbuild';
 for (const minify of [false, true]) {
   const result = await build({ entryPoints: ['src/rotation/render-context.ts'], bundle: true,
     write: false, minify, format: 'esm', target: ['chrome109'] });
-  const { resolveRenderContext, FrameEntryError, activeCamera } = await import(
+  const { resolveRenderContext, FrameEntryError, activeCamera, controlsCamera, nativeObject } = await import(
     `data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
   const variant = minify ? 'minified' : 'unminified';
   const ref = value => ({ __v_isRef: true, value });
@@ -58,12 +58,12 @@ for (const minify of [false, true]) {
   test(`${variant}: rejects mismatched camera and missing native frame hooks with diagnostics`, () => {
     const f = fixture();
     f.canvas.__vueParentComponent = { provides: { ctx: f.context } };
-    f.controls.camera = {};
+    f.controls.camera = { isCamera: true };
     delete f.manager.onRender;
     assert.throws(() => resolveRenderContext(f.canvas), error => {
       assert(error instanceof FrameEntryError);
       assert.equal(error.diagnostics.matchingCanvas, 1);
-      assert(error.diagnostics.missing.includes('绑定活动相机的控制器'));
+      assert.equal(error.diagnostics.cameraBinding, 'different-camera');
       assert(error.diagnostics.missing.includes('渲染完成回调'));
       assert(!error.message.includes('请点击'));
       return true;
@@ -88,6 +88,58 @@ for (const minify of [false, true]) {
       assert.equal(error.diagnostics.contexts, 1);
       assert.equal(error.diagnostics.matchingCanvas, 0); return true;
     });
+  });
+  const proxy = target => new Proxy(target, {
+    get(target, key, receiver) { return key === '__v_raw' ? target : Reflect.get(target, key, receiver); },
+  });
+  test(`${variant}: proxy and raw camera resolve to the same native instance`, () => {
+    for (const wrapControls of [false, true]) {
+      const f = fixture();
+      const rawControls = f.controls;
+      f.context.camera.activeCamera = ref(proxy(proxy(f.camera)));
+      f.controls.camera = ref(proxy(f.camera));
+      f.context.controls = ref(wrapControls ? proxy(rawControls) : rawControls);
+      f.context.scene = ref(proxy(f.context.scene.value));
+      f.manager.instance = ref(proxy(f.manager.instance.value));
+      f.canvas.__vueParentComponent = { context: f.context };
+      const binding = resolveRenderContext(f.canvas);
+      assert.equal(binding.camera, f.camera);
+      assert.equal(binding.controls, rawControls);
+      assert.equal(controlsCamera(binding.controls), f.camera);
+      assert.equal(nativeObject(binding.scene), binding.scene);
+      assert.equal(nativeObject(binding.renderer), binding.renderer);
+    }
+  });
+  test(`${variant}: uses camera-controls backing field only without a public camera`, () => {
+    const f = fixture();
+    f.controls._camera = proxy(f.camera);
+    delete f.controls.camera;
+    f.canvas.__vueParentComponent = { context: f.context };
+    assert.equal(resolveRenderContext(f.canvas).camera, f.camera);
+    f.controls.camera = { isCamera: true };
+    assert.throws(() => resolveRenderContext(f.canvas), error => {
+      assert.equal(error.diagnostics.cameraBinding, 'different-camera');
+      assert.equal(error.diagnostics.cameraAccessor, 'camera'); return true;
+    });
+  });
+  test(`${variant}: different cameras remain rejected even with identical UUID and matrices`, () => {
+    const f = fixture(); f.camera.uuid = 'same'; f.camera.matrixWorld = { elements: [1] };
+    f.controls.camera = proxy({ ...f.camera });
+    f.context.camera.activeCamera = ref(proxy(f.camera));
+    f.canvas.__vueParentComponent = { context: f.context };
+    assert.throws(() => resolveRenderContext(f.canvas), error => {
+      assert.equal(error.diagnostics.cameraBinding, 'different-camera'); return true;
+    });
+  });
+  test(`${variant}: reports unreadable controller camera and bounds malformed proxy chains`, () => {
+    const f = fixture(); delete f.controls.camera;
+    f.canvas.__vueParentComponent = { context: f.context };
+    assert.throws(() => resolveRenderContext(f.canvas), error => {
+      assert.equal(error.diagnostics.cameraBinding, 'missing');
+      assert.equal(error.diagnostics.cameraAccessor, 'none'); return true;
+    });
+    const cycle = {}; cycle.__v_raw = cycle;
+    assert.equal(nativeObject(cycle), undefined);
   });
   test(`${variant}: bounds cyclic and oversized injection graphs`, () => {
     const f = fixture(); let node = {};

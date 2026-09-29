@@ -3,7 +3,7 @@ import * as Mp4Muxer from 'mp4-muxer';
 import { DEFAULT_SETTINGS as DEFAULTS, normalizeSettings } from './settings/settings';
 import { MATERIALS, EXPORT_KINDS, EXPORT_ITEMS } from './settings/catalog';
 import { makeFramePlan, transitionProgress } from './rotation/frame-plan';
-import { resolveRenderContext, activeCamera, unref, FrameEntryError } from './rotation/render-context';
+import { resolveRenderContext, activeCamera, controlsCamera, nativeObject, unref, FrameEntryError } from './rotation/render-context';
 import { clamp } from './utils/numbers';
 import { safeFilenamePart, formatOutputFilename } from './utils/filename';
 import { validProjectUrl } from './projects/project-url';
@@ -41,8 +41,15 @@ export function startApp(version) {
   let ui = null;
 
   // 录制只接受真实 Tres 上下文。没有入口时禁止回退到模拟鼠标。
-  function findRenderContext(canvas) {
-    return resolveRenderContext(canvas);
+  function findRenderContext(canvas, diagnose = false) {
+    try { return resolveRenderContext(canvas); }
+    catch (error) {
+      if (diagnose && error instanceof FrameEntryError) {
+        // Scalars only: never dump the Vue graph or account state.
+        console.warn('[Tripo Rotation] 逐帧入口诊断', { version: SCRIPT_VERSION, ...error.diagnostics });
+      }
+      throw error;
+    }
   }
 
   function restoreOriginalLighting() {
@@ -237,7 +244,8 @@ export function startApp(version) {
   function applyView(binding, view, angle = 0) {
     const { controls, camera, canvas } = binding;
     if (!canvas.isConnected || canvas.width !== view.width || canvas.height !== view.height ||
-        activeCamera(binding.context) !== camera || unref(binding.context.scene) !== binding.scene) {
+        activeCamera(binding.context) !== camera || nativeObject(binding.context.scene) !== binding.scene ||
+        nativeObject(binding.context.controls) !== controls || controlsCamera(controls) !== camera) {
       throw new Error('预览器尺寸、相机或工程已变化，请保持窗口尺寸不变后重新导出');
     }
     // All targets are absolute, transition=false. Never integrate pointer deltas
@@ -260,7 +268,7 @@ export function startApp(version) {
   }
 
   function createFrameLock(canvas, initialView = null) {
-    const binding = findRenderContext(canvas);
+    const binding = findRenderContext(canvas, true);
     const { controls, renderer, manager, scene, camera } = binding;
     const view = initialView || snapshotView(binding);
     const originalEnabled = controls.enabled;
@@ -331,7 +339,7 @@ export function startApp(version) {
       }
     };
     const wrappedRender = function (this: any, renderScene, renderCamera, ...args) {
-      if (pending?.armed && renderScene === scene && renderCamera === camera) {
+      if (pending?.armed && nativeObject(renderScene) === scene && nativeObject(renderCamera) === camera) {
         try {
           applyTransparency();
           assertSignature(cameraSignature(camera), pending.signature, '渲染时相机');
@@ -414,7 +422,7 @@ export function startApp(version) {
     try {
       const canvas = findViewerCanvas() as HTMLElement | null;
       if (!canvas) throw new Error('请先打开一个已加载的模型');
-      const binding = findRenderContext(canvas);
+      const binding = findRenderContext(canvas, true);
       const view = snapshotView(binding);
       setStatus(`逐帧入口可用 · ${view.width}×${view.height} · 原生相机与渲染完成回调`, 'ready', true);
       console.info('[Tripo Rotation] 逐帧入口诊断', {
@@ -424,10 +432,9 @@ export function startApp(version) {
       });
     } catch (error) {
       // Only structural counters and known capability names; no Vue state or account data.
-      console.warn('[Tripo Rotation] 逐帧入口诊断', {
-        version: SCRIPT_VERSION,
-        ...(error instanceof FrameEntryError ? error.diagnostics : { stage: '视角读取或画布检查失败' }),
-      });
+      if (!(error instanceof FrameEntryError)) {
+        console.warn('[Tripo Rotation] 逐帧入口诊断', { version: SCRIPT_VERSION, stage: '视角读取或画布检查失败' });
+      }
       setStatus(`逐帧入口检查失败：${error.message}`, 'error');
     }
   }
