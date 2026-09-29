@@ -10,10 +10,8 @@
 // @updateURL    https://raw.githubusercontent.com/Ben8368/tripo-model-rotation/master/tripo-model-rotation.user.js
 // @downloadURL  https://raw.githubusercontent.com/Ben8368/tripo-model-rotation/master/tripo-model-rotation.user.js
 // @require      https://raw.githubusercontent.com/Ben8368/tripo-model-rotation/v{{VERSION}}/dist/tripo-core.min.js
-// @match        https://studio.tripo3d.ai/workspace/generate
-// @match        https://studio.tripo3d.ai/workspace/generate/*
-// @match        https://studio.tripo3d.ai/*/workspace/generate
-// @match        https://studio.tripo3d.ai/*/workspace/generate/*
+// @match        https://studio.tripo3d.ai/workspace*
+// @match        https://studio.tripo3d.ai/*/workspace*
 // @run-at       document-idle
 // @grant        none
 // ==/UserScript==

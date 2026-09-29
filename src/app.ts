@@ -1,3 +1,4 @@
+import { mountAuthControls } from './auth/controls';
 import * as Mp4Muxer from 'mp4-muxer';
 import { DEFAULT_SETTINGS as DEFAULTS, normalizeSettings } from './settings/settings';
 import { MATERIALS, EXPORT_KINDS, EXPORT_ITEMS } from './settings/catalog';
@@ -2318,6 +2319,10 @@ export function startApp(version) {
       .calibrate input { min-width:0; }
       .calibrate button { padding:5px 8px; }
       .note { margin:8px 0 0; color:#858892; font-size:9.5px; line-height:1.45; }
+      #accountForm { display:grid; gap:6px; margin-top:8px; }
+      #accountForm input { width:100%; }
+      .account-option { display:flex; align-items:center; gap:6px; margin-top:8px; }
+      .account-option input { width:auto; }
       footer { display:flex; justify-content:space-between; margin-top:9px; color:#777b85; font-size:9.5px; }
       kbd { padding:1px 4px; border-radius:4px; background:#303239; color:#bbb; font-family:inherit; }
       .modal-layer { position:fixed; inset:0; z-index:2147483647; display:flex; align-items:center; justify-content:center; padding:20px; background:rgba(0,0,0,.58); pointer-events:auto; }
@@ -2444,6 +2449,27 @@ export function startApp(version) {
             <button id="plus" title="一圈距离增加 1%">+1%</button>
           </div>
         </details>
+        <details id="accountDetails">
+          <summary>账号登录 / 刷新会话</summary>
+          <form id="accountForm">
+            <label for="accountEmail">邮箱</label>
+            <input id="accountEmail" type="email" autocomplete="username" required aria-label="账号邮箱">
+            <label for="accountPassword">密码</label>
+            <input id="accountPassword" type="password" autocomplete="current-password" required aria-label="账号密码">
+            <div class="primary">
+              <button id="accountLogin" type="submit">登录</button>
+              <button id="accountRefresh" type="button">刷新会话</button>
+            </div>
+          </form>
+          <label class="account-option"><input id="accountRemember" type="checkbox">记住账号密码（仅本浏览器）</label>
+          <label class="account-option"><input id="accountKeepAlive" type="checkbox">自动保活，失效后自动登录</label>
+          <p class="note">勾选记住密码并保存后，账号密码将以明文存于 Tripo 的本地存储，同站点代码可读取。保活需要保持浏览器和至少一个 Tripo 页面打开。</p>
+          <div class="primary">
+            <button id="accountSave" type="button">保存设置</button>
+            <button id="accountClear" type="button">清除账号密码</button>
+          </div>
+          <p class="note" id="accountStatus" role="status" aria-live="polite">自动保活默认关闭。输入后可直接登录，或保存账号以便自动登录。</p>
+        </details>
         <footer>
           <span><kbd>Alt+1</kbd> 匀速圈　<kbd>Alt+2</kbd> 转场　<kbd>Alt+S</kbd> 截图</span>
           <span><kbd>Alt+H</kbd> 面板　<kbd>Esc</kbd> 停止</span>
@@ -2534,6 +2560,7 @@ export function startApp(version) {
     exportAll: $('#exportAll'), batchMenu: $('#batchMenu'), batchToggle: $('#batchToggle'),
   };
 
+  mountAuthControls(shadow, () => Boolean(exportBusy || batchRunning || activeRun || pendingSave || activeSaves));
   syncUI();
   syncProjectNameField();
   initializeBatchMenu();

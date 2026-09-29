@@ -33,14 +33,14 @@ Tripo Studio 3D 模型旋转、录屏与批量导出用户脚本。
 ```text
 @updateURL   https://raw.githubusercontent.com/Ben8368/tripo-model-rotation/master/tripo-model-rotation.user.js
 @downloadURL https://raw.githubusercontent.com/Ben8368/tripo-model-rotation/master/tripo-model-rotation.user.js
-@require     https://raw.githubusercontent.com/Ben8368/tripo-model-rotation/v3.9.6/dist/tripo-core.min.js
+@require     https://raw.githubusercontent.com/Ben8368/tripo-model-rotation/v3.9.8/dist/tripo-core.min.js
 ```
 
 根目录脚本是很小的安装与更新入口，业务核心由 `@require` 从同一 GitHub 仓库的不可变版本标签加载。油猴管理器会缓存远程依赖，不需要注册额外 CDN 账号。
 
 后续发布新版本时，更新 `package.json` 的版本号并执行 `npm run check`，构建器会让入口自动指向对应的 `v版本号` 标签。必须同时推送 `master` 和该版本标签，否则新入口无法取得核心文件。核心每次页面加载还会请求 `master/runtime-status.json`：仓库公开、状态启用且当前版本不低于 `minimumVersion` 时才启动，仓库改为私有后匿名请求失败，缓存核心在刷新后也会停止运行。Tampermonkey 或 Violentmonkey 会按自己的更新周期检查入口；也可以在用户脚本管理器中手动执行“检查更新”。
 
-当前版本：`3.9.6`
+当前版本：`3.9.8`
 
 `minimumVersion` 必须是稳定版本格式 `major.minor.patch`（例如 `3.9.5`），按三个数值段比较；缺失或格式无效时拒绝启动。该检查从 3.9.6 起生效，不能追溯修复已缓存的 3.9.5 或更早核心。当前最低版本配置保持 3.9.5，不随本次修复自动提高。
 
@@ -211,3 +211,23 @@ mp4-muxer 5.2.2 已被上游标记为 deprecated，本次保留原版本以避�
 ## 许可
 
 MIT License
+
+## 账号登录与自动保活（3.9.8）
+
+脚本覆盖 Tripo Studio 工作区首页及子页面（包含带语言前缀的地址）。展开面板中的“账号登录 / 刷新会话”：
+
+1. 填写邮箱和密码。只需手动登录时，直接点“登录”。
+2. 要在页面重新打开后继续自动登录，勾选“记住账号密码（仅本浏览器）”。
+3. 勾选“自动保活，失效后自动登录”，再点“保存设置”。这会立即开始一次检查。
+4. 已保存密码不回填到输入框；相同邮箱留空可继续使用保存的密码。更换邮箱时必须重新输入密码。
+5. 取消自动保活会立即停止后续自动请求；取消记住密码或点“清除账号密码”会删除本地保存值。已发出的请求无法撤回。
+
+**存储说明：**当前版本用 Tripo 站点的 localStorage 明文保存账号密码，同站点脚本可以读取。这不是加密保险箱；请仅在可信任的个人浏览器使用。账号密码不写进脚本源码、导出设置或 GitHub，脚本不输出密码、Cookie、JWT 或原始认证错误。未选择保存时只用于当前手动登录。
+
+**运行逻辑：**约每 5 分钟调用原生认证 SDK 刷新访问令牌；失败后单独检查会话，只有 /sessions/whoami 明确返回 401 才自动提交保存的密码。网络错误、403、429、5xx 和未知结果不会触发密码登录，刷新会按 5～30 分钟退避。自动重登失败或中断后暂停，需人工处理密码/验证，再保存设置重新开启。
+
+多个页面通过 Web Locks 和共享下次检查时间避免重复请求；不支持 Web Locks 时不开启自动保活。离线和导出/保存期间暂缓操作。网站退出登录事件会关闭自动保活；网站事件接口不可用时也不自动运行。
+
+**使用范围：**需要浏览器及至少一个 Tripo 工作区页面保持打开。后台节流、休眠会推迟检查；重新显示页面或网络恢复后重新检查。服务端强制到期后依靠自动重新登录恢复，不能保证 Cookie 永不过期，也不能代替验证码或其他人工验证。
+
+本地构建已通过自动化测试；真实账户的登录与跨日保活仍待安装后验证。协议依据见 [认证调研](docs/authentication.md)。
