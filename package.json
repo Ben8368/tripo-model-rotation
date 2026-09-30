@@ -1,10 +1,11 @@
 {
   "name": "tripo-model-rotation",
-  "version": "3.12.7",
+  "version": "3.12.8",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",
+    "check:versions": "node scripts/check-version-commits.mjs",
     "test": "node --test",
     "check": "npm run typecheck && npm run build && npm test && node --check tripo-model-rotation.user.js && node --check dist/tripo-core.min.js && node --check dist/tripo-model-rotation.standalone.user.js",
     "typecheck": "tsc --noEmit"
