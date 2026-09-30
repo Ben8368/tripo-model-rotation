@@ -121,7 +121,7 @@ export function startApp(version) {
   function renderRestorePoints() {
     if (!ui?.restorePointList || typeof ui.restorePointList.replaceChildren !== 'function') return;
     const points = loadRestorePoints()[currentProjectId()] || [];
-    ui.restorePointCount.textContent = `${points.length} 个还原点`;
+    ui.restorePointCount.textContent = `${points.length} 个`;
     ui.restorePointList.replaceChildren();
     for (const point of points) {
       const button = document.createElement('button');
@@ -220,7 +220,7 @@ export function startApp(version) {
       let checkbox = link.querySelector('input.tripo-batch-asset-check') as HTMLInputElement | null;
       if (!checkbox) {
         checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.className = 'tripo-batch-asset-check';
-        checkbox.title = '加入跨工程批量导出'; checkbox.setAttribute('aria-label', '加入跨工程批量导出');
+        checkbox.title = '加入多个项目批量导出'; checkbox.setAttribute('aria-label', '加入多个项目批量导出');
         checkbox.style.cssText = 'position:absolute;left:6px;top:6px;z-index:20;width:18px;height:18px;accent-color:#765cff;';
         checkbox.addEventListener('pointerdown', event => event.stopPropagation());
         checkbox.addEventListener('click', event => {
@@ -245,13 +245,13 @@ export function startApp(version) {
     try { session = loadMultiBatchSession(); }
     catch (error) {
       ui.multiBatchStatus.textContent = error.message;
-      if (ui.multiBatchStart) { ui.multiBatchStart.textContent = '跨工程批量导出'; ui.multiBatchStart.disabled = true; }
+      if (ui.multiBatchStart) { ui.multiBatchStart.textContent = '多个项目批量导出'; ui.multiBatchStart.disabled = true; }
       if (ui.multiBatchCancel) ui.multiBatchCancel.hidden = true;
       return;
     }
     const assets = loadSelectedAssets();
-    ui.multiBatchStatus.textContent = session ? `跨工程批量：${session.status} · ${session.pointIndex}/${session.points.length} 个工程 · 已保存 ${session.completedFiles} 个文件` : `已选择 ${assets.length} 个工程`;
-    if (ui.multiBatchStart) ui.multiBatchStart.textContent = session ? '继续跨工程批量' : '跨工程批量导出';
+    ui.multiBatchStatus.textContent = session ? `批量任务${session.status === 'running' ? '进行中' : session.status === 'paused' ? '已暂停' : '已取消'} · 第 ${session.pointIndex}/${session.points.length} 个项目 · 已保存 ${session.completedFiles} 个文件` : `已选择 ${assets.length} 个项目`;
+    if (ui.multiBatchStart) ui.multiBatchStart.textContent = session ? '继续批量导出' : '多个项目批量导出';
     if (ui.multiBatchStart) ui.multiBatchStart.disabled = Boolean(session && session.status === 'running');
     if (ui.multiBatchCancel) ui.multiBatchCancel.hidden = !session || session.status === 'cancelled';
   }
@@ -1044,7 +1044,7 @@ export function startApp(version) {
     const selected = selectedExportItems();
     const available = wireframeAvailable();
     const total = selected.length * (settings.batchWireframeVariants && available ? 2 : 1);
-    ui.exportAll.textContent = `一键导出（${total}个文件）`;
+    ui.exportAll.textContent = `导出所选内容（${total} 项）`;
     ui.exportAll.disabled = !selected.length;
     for (const checkbox of ui.batchMenu.querySelectorAll('input[data-export-key]')) {
       checkbox.checked = selected.some(item => item.key === checkbox.dataset.exportKey);
@@ -2686,7 +2686,7 @@ export function startApp(version) {
   shadow.innerHTML = `
     <style>
       * { box-sizing: border-box; }
-      .panel { width: 304px; color: #f7f7f8; background: rgba(20,21,25,.94); border: 1px solid rgba(255,255,255,.12); border-radius: 14px; box-shadow: 0 16px 45px rgba(0,0,0,.38); backdrop-filter: blur(16px); overflow: hidden; pointer-events: auto; }
+      .panel { width: 330px; color: #f7f7f8; background: rgba(20,21,25,.94); border: 1px solid rgba(255,255,255,.12); border-radius: 14px; box-shadow: 0 16px 45px rgba(0,0,0,.38); backdrop-filter: blur(16px); overflow: hidden; pointer-events: auto; }
       .panel[hidden] { display: none; }
       header { display:flex; align-items:center; justify-content:space-between; padding:12px 13px 10px; border-bottom:1px solid rgba(255,255,255,.08); }
       h2 { margin:0; font-size:14px; font-weight:700; letter-spacing:.2px; }
@@ -2719,7 +2719,7 @@ export function startApp(version) {
       .calibrate { display:grid; grid-template-columns:1fr auto auto; gap:6px; margin-top:9px; }
       .calibrate input { min-width:0; }
       .calibrate button { padding:5px 8px; }
-      .note { margin:8px 0 0; color:#858892; font-size:9.5px; line-height:1.45; }
+      .note { margin:8px 0 0; color:#a0a2aa; font-size:10.5px; line-height:1.5; }
       #accountForm { display:grid; gap:6px; margin-top:8px; }
       #accountForm input { width:100%; }
       .account-option { display:flex; align-items:center; gap:6px; margin-top:8px; }
@@ -2761,41 +2761,41 @@ export function startApp(version) {
         <span class="hint">v${SCRIPT_VERSION} · 明亮白膜</span>
       </header>
       <div class="body">
-        <div class="status">正在识别模型预览器…</div>
+        <div class="status">正在连接模型预览器…</div>
         <div id="mainPage">
         <div class="primary">
-          <button class="run" id="uniform">匀速圈</button>
+          <button class="run" id="uniform">匀速旋转</button>
           <button class="run" id="transition">加速转场</button>
           <button class="capture" id="screenshot">截图当前画面</button>
           <div class="export-split">
-            <button class="export-all" id="exportAll">一键导出（9个文件）</button>
+            <button class="export-all" id="exportAll">导出所选内容（9 项）</button>
             <button class="export-toggle" id="batchToggle" aria-label="选择导出内容" aria-expanded="false" aria-controls="batchMenu">▾</button>
           </div>
           <div class="batch-menu" id="batchMenu" hidden role="group" aria-label="导出内容选择">
-            <p class="note">勾选要导出的文件，选择会自动记住。</p>
+            <p class="note">先选要导出的内容，再点绿色按钮开始。选项会自动记住。</p>
           </div>
           <button class="stop" id="stop">立即停止</button>
           <button id="hide">隐藏面板</button>
-          <button class="capture" id="checkFrameEntry">检查逐帧入口</button>
+          <button class="capture" id="checkFrameEntry">检查录制功能</button>
           <button class="capture" id="openProjects">已命名项目</button>
-          <button class="multi-batch" id="multiBatchStart">跨工程批量导出</button>
-          <button id="multiBatchCancel" hidden>取消跨工程批量</button>
-          <p class="note" id="multiBatchStatus">资产卡片勾选模型后，可按已记录视角跨工程续跑。</p>
+          <button class="multi-batch" id="multiBatchStart">多个项目批量导出</button>
+          <button id="multiBatchCancel" hidden>取消批量导出</button>
+          <p class="note" id="multiBatchStatus">先在模型卡片上勾选项目。每个项目需先导出一次，保存视角后才能批量处理。</p>
         </div>
         <details id="restorePointsDetails">
-          <summary>导出还原点 <span class="hint" id="restorePointCount">0 个还原点</span></summary>
-          <button id="recordRestorePoint" type="button">记录当前导出点</button>
+          <summary>已保存的导出视角 <span class="hint" id="restorePointCount">0 个</span></summary>
+          <button id="recordRestorePoint" type="button">保存当前视角</button>
           <div id="restorePointList"></div>
-          <p class="note">每次导出会保存当前视角、相机尺寸和导出设置，可用于跨工程批处理或补导。</p>
+          <p class="note">导出时会自动保存视角和设置，可用于多个项目批量导出或补导文件。</p>
         </details>
         <details open>
           <summary>录制与截图输出</summary>
           <div class="project-line">
-            <input id="projectName" type="text" placeholder="首次导出时命名工程" title="名称按网址中的工程 UUID 分别记忆，允许重名">
+            <input id="projectName" type="text" placeholder="给当前项目命名（可选）" title="名称按网址中的工程 UUID 分别记忆，允许重名">
             <button id="renameProject">改名</button>
           </div>
           <div class="grid">
-            <label class="check"><input id="recordEnabled" type="checkbox">旋转时自动录制并下载视频</label>
+            <label class="check"><input id="recordEnabled" type="checkbox">旋转时自动录制视频</label>
             <label for="recordingScope">输出范围</label>
             <select id="recordingScope">
               <option value="canvas">仅模型画面</option>
@@ -2804,18 +2804,18 @@ export function startApp(version) {
             <label for="recordingFps">帧率（FPS）</label>
             <input id="recordingFps" type="number" min="15" max="120" step="1" list="fpsOptions">
             <datalist id="fpsOptions"><option value="24"><option value="25"><option value="30"><option value="50"><option value="60"></datalist>
-            <label for="videoBitrate">码率（Mbps，0=自动）</label>
+            <label for="videoBitrate">视频码率（Mbps，0 为自动）</label>
             <input id="videoBitrate" type="number" min="0" max="200" step="1">
             <label class="check"><input id="showAxisInOutput" type="checkbox">输出中显示右上角坐标轴</label>
             <label class="check"><input id="transparentOutput" type="checkbox">关闭背景 · 透明 MOV / PNG</label>
-            <p class="note">透明输出仅支持“仅模型”。MOV 使用无损 PNG 帧，保留 Alpha；文件较大、导出较慢，单段上限 1GB。背景恢复不影响模型光照。</p>
+            <p class="note">透明背景只支持“仅模型画面”。MOV 画质无损，但文件较大、导出较慢；每段最多 1 GB。</p>
           </div>
-          <p class="note">视频按帧号设置绝对角度，在原生渲染完成时取图。切页不取消：后台有新帧就继续；若浏览器挂起绘制则保留进度，回来续录。请勿刷新或关闭 Tripo。批量三种材质共享起始视角并校验相机矩阵。严格视频暂仅支持“仅模型画面”；整标签页仍可截图。坐标轴默认隐藏，保留背景。</p>
+          <p class="note">视频会逐帧记录模型画面，旋转角度更准确。导出时可以切换标签页，但请勿刷新或关闭 Tripo；如果浏览器暂停绘制，回来后会继续。批量导出不同材质时会使用相同起始视角。“整个当前标签页”目前只支持截图；视频请选择“仅模型画面”。</p>
         </details>
         <details>
           <summary>光照效果</summary>
           <div class="grid">
-            <label class="check"><input id="studioLighting" type="checkbox">明亮棚拍光照（关闭即恢复原站）</label>
+            <label class="check"><input id="studioLighting" type="checkbox">改善模型光照（关闭可恢复）</label>
             <label for="lightingEnvironment">环境光倍率</label>
             <input id="lightingEnvironment" type="number" min="0" max="3" step="0.05">
             <label for="lightingDirect">现有灯光倍率</label>
@@ -2823,10 +2823,10 @@ export function startApp(version) {
             <label for="lightingExposure">曝光倍率</label>
             <input id="lightingExposure" type="number" min="0.5" max="2" step="0.05">
           </div>
-          <p class="note">棚拍光照保留原有环境、灯光和曝光调节；对白膜 Matcap 可能无效。下面的明亮白膜仅提亮白膜表面中间调，保留黑位、白位及独立线框，贴图与法线不变。</p>
+          <p class="note">棚拍光照会调整环境光、灯光和曝光，对白膜材质可能不起作用。要提亮白膜，请使用下方选项。</p>
           <div class="grid">
-            <label class="check"><input id="brightSolid" type="checkbox">明亮白膜（仅白膜，关闭即恢复）</label>
-            <label for="solidLift">白膜提亮强度（0–1）</label>
+            <label class="check"><input id="brightSolid" type="checkbox">提亮白膜（仅对白膜生效）</label>
+            <label for="solidLift">提亮幅度（0–1）</label>
             <input id="solidLift" type="number" min="0" max="1" step="0.05">
           </div>
         </details>
@@ -2843,18 +2843,18 @@ export function startApp(version) {
             <input id="transitionTurns" type="number" min="0.25" max="20" step="0.25">
             <label for="acceleration">加速时间（秒）</label>
             <input id="acceleration" type="number" min="0.05" max="20" step="0.05">
-            <label for="cruise">高速保持（秒）</label>
+            <label for="cruise">高速持续时间（秒）</label>
             <input id="cruise" type="number" min="0" max="60" step="0.1">
             <label for="deceleration">减速时间（秒）</label>
             <input id="deceleration" type="number" min="0.05" max="20" step="0.05">
             <label for="countdown">启动倒计时（秒）</label>
             <input id="countdown" type="number" min="0" max="10" step="1">
-            <label for="settle">末尾静止保持（秒）</label>
+            <label for="settle">结束后停留（秒）</label>
             <input id="settle" type="number" min="0" max="5" step="0.1">
             <label class="check"><input id="autoHide" type="checkbox">旋转开始时自动隐藏面板</label>
           </div>
           <div class="calibrate">
-            <input id="ratio" type="number" min="0.2" max="3" step="0.01" title="一圈拖拽距离 ÷ Canvas 高度">
+            <input id="ratio" type="number" min="0.2" max="3" step="0.01" placeholder="旋转灵敏度" aria-label="旋转灵敏度" title="调整鼠标拖动旋转时的灵敏度">
             <button id="minus" title="一圈距离减少 1%">−1%</button>
             <button id="plus" title="一圈距离增加 1%">+1%</button>
           </div>
@@ -2872,16 +2872,16 @@ export function startApp(version) {
             </div>
           </form>
           <label class="account-option"><input id="accountRemember" type="checkbox">记住账号密码（仅本浏览器）</label>
-          <label class="account-option"><input id="accountKeepAlive" type="checkbox">自动保活，失效后自动登录</label>
-          <p class="note">勾选记住密码并保存后，账号密码将以明文存于 Tripo 的本地存储，同站点代码可读取。保活需要保持浏览器和至少一个 Tripo 页面打开。</p>
+          <label class="account-option"><input id="accountKeepAlive" type="checkbox">会话失效时自动登录</label>
+          <p class="note">勾选“记住账号密码”后，密码会以明文保存在 Tripo 的本地存储，同站点代码可以读取。自动登录需要保持浏览器和至少一个 Tripo 页面开启。</p>
           <div class="primary">
             <button id="accountSave" type="button">保存设置</button>
             <button id="accountClear" type="button">清除账号密码</button>
           </div>
-          <p class="note" id="accountStatus" role="status" aria-live="polite">自动保活默认关闭。输入后可直接登录，或保存账号以便自动登录。</p>
+          <p class="note" id="accountStatus" role="status" aria-live="polite">自动登录默认关闭。输入账号密码后可直接登录，或保存账号以便自动登录。</p>
         </details>
         <footer>
-          <span><kbd>Alt+1</kbd> 匀速圈　<kbd>Alt+2</kbd> 转场　<kbd>Alt+S</kbd> 截图</span>
+          <span><kbd>Alt+1</kbd> 匀速旋转　<kbd>Alt+2</kbd> 转场　<kbd>Alt+S</kbd> 截图</span>
           <span><kbd>Alt+H</kbd> 面板　<kbd>Esc</kbd> 停止</span>
         </footer>
         </div>
@@ -2889,14 +2889,14 @@ export function startApp(version) {
           <div class="projects-heading"><button id="backProjects">← 返回</button><span>已命名项目</span></div>
           <input id="projectSearch" type="search" placeholder="搜索名称或 ID" aria-label="搜索已命名项目">
           <div id="projectList"></div>
-          <p class="note">仅显示在本浏览器中新版命名的项目；点击可切换。导出或保存期间不能切换。</p>
+          <p class="note">这里只显示你在本浏览器里命名过的项目。点击项目即可切换；导出或保存文件时不能切换。</p>
         </div>
       </div>
     </section>
     <div class="modal-layer" id="projectNameModal" hidden>
       <div class="modal-card">
         <h3>命名当前工程</h3>
-        <p>命名为可选项，可跳过并使用工程 ID 导出。填写的名称会按工程 UUID 记忆，不同工程允许重名。</p>
+        <p>项目名称可以不填。不命名时会使用项目 ID 作为文件名。名称会保存在本浏览器中，不同项目可以重名。</p>
         <input id="projectNameInput" type="text" maxlength="80" placeholder="例如：风车">
         <div class="modal-actions">
           <button id="projectNameCancel">取消</button>
@@ -2908,7 +2908,7 @@ export function startApp(version) {
     <div class="modal-layer" id="batchStartModal" hidden>
       <div class="modal-card">
         <h3>准备共享标签页</h3>
-        <p>输出范围是“整个当前标签页”。请点击开始共享，然后在浏览器中选择当前标签页。本次任务只需选择一次；取消或停止后不会继续导出。</p>
+        <p>你选择了“整个当前标签页”。点击“开始共享”，再从浏览器弹窗中选择当前标签页即可。一次任务只需选择一次；取消或停止后，导出也会停止。</p>
         <div class="modal-actions">
           <button id="batchStartCancel">取消</button>
           <button class="primary-action" id="batchStartConfirm">开始共享</button>
