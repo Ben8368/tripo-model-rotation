@@ -2,7 +2,7 @@
 // @name         Tripo 3D 模型录屏旋转助手
 // @namespace    codex.tripo.rotation
 // @version      {{VERSION}}
-// @description  支持独立离屏 / GLB 批量导出、多材质固定帧 MP4、透明 MOV/PNG 与线框的 Tripo Studio 模型旋转助手。
+// @description  所有导出均采用独立离屏渲染：透明 MOV 视频、透明 PNG 截图及配套灰色渐变背景图，支持批量、GLB 与线框。
 // @author       Codex
 // @license      MIT
 // @homepageURL  https://github.com/Ben8368/tripo-model-rotation

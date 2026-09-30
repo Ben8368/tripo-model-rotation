@@ -18,6 +18,8 @@ Tripo Studio 3D 模型旋转、录屏与批量导出用户脚本。
 
 ## 全离屏透明导出（3.13.5）
 
+3.13.6 修正用户脚本安装简介，使其准确说明当前的透明 MOV、透明 PNG 和配套背景图输出。
+
 3.13.5 将单项、快捷键、批量、跨项目续跑以及本地/直链 GLB 的所有输出统一为独立离屏渲染。视频固定为带透明通道的 MOV（无损 PNG 帧），每个模型输出目录会附带一张同分辨率的灰色渐变背景 PNG；背景不再被烘焙进视频。导出不驱动网页旋转，当前网页仅在复制模型时短暂准备显示状态。
 
 保留 3.13.3 的场景层级重建：使用内置 Three.js 对象，不调用网页对象可能被覆写的 clone / traverse 方法；骨骼重新绑定至复制后的节点。
@@ -48,9 +50,9 @@ Three.js、GLTFLoader 和 Meshopt 解码器均打包进安装包，无需另外�
 
 然后点击下面的安装链接：
 
-**[安装 Tripo Model Rotation v3.13.5](https://raw.githubusercontent.com/Ben8368/tripo-model-rotation/v3.13.5/tripo-model-rotation.user.js)**
+**[安装 Tripo Model Rotation v3.13.6](https://raw.githubusercontent.com/Ben8368/tripo-model-rotation/v3.13.6/tripo-model-rotation.user.js)**
 
-也可以打开脚本文件的 [固定版本 GitHub 页面](https://github.com/Ben8368/tripo-model-rotation/blob/v3.13.5/tripo-model-rotation.user.js)，点击 `Raw`，由用户脚本管理器接管安装。发布后的完整安装包也会作为资产放在 [GitHub Releases](https://github.com/Ben8368/tripo-model-rotation/releases/latest)。
+也可以打开脚本文件的 [固定版本 GitHub 页面](https://github.com/Ben8368/tripo-model-rotation/blob/v3.13.6/tripo-model-rotation.user.js)，点击 `Raw`，由用户脚本管理器接管安装。发布后的完整安装包也会作为资产放在 [GitHub Releases](https://github.com/Ben8368/tripo-model-rotation/releases/latest)。
 
 ## 自动更新
 
@@ -65,7 +67,7 @@ Three.js、GLTFLoader 和 Meshopt 解码器均打包进安装包，无需另外�
 
 每次修改提交都要在同一提交提升 `package.json` 版本号，并执行 `npm run check`。安装链接固定到对应版本标签，避免 GitHub Raw 的 `master` 地址在发布后的短时间内仍返回旧缓存；自动更新地址仍指向 `master`，可能有几分钟延迟。脚本每次页面加载仍会请求 `master/runtime-status.json`：仓库公开、状态启用且当前版本不低于 `minimumVersion` 时才启动。Tampermonkey 或 Violentmonkey 会按自己的更新周期检查入口；也可以在用户脚本管理器中手动执行“检查更新”。
 
-当前版本：`3.13.5`
+当前版本：`3.13.6`
 
 修改本地仓库不会自动更新浏览器中已安装的用户脚本。发布到 `master` 后等待脚本管理器更新，或手动导入本地构建的 `tripo-model-rotation.user.js`；页面面板上的版本号可用于确认实际运行版本。更新时请停用重复安装的旧副本。
 
@@ -194,8 +196,8 @@ mp4-muxer 5.2.2 已被上游标记为 deprecated，本次保留原版本以避�
 2. 同步本文当前版本说明和固定版本安装链接。CI 会逐个检查本次推送或 PR 的提交是否比各自第一父提交提升版本，并检查锁文件一致性。
 3. 执行 `npm run check`，按 `tests/MANUAL.md` 在 Tripo 实际验收。
 4. 同时提交源码、锁文件、根目录入口和 `dist/` 构建物。
-5. 创建与 `package.json` 一致的版本标签，例如 `git tag -a v3.13.5 -m "v3.13.5"`。
-6. 使用 `git push --atomic origin master v3.13.5` 同时推送入口与版本标签。Release 工作流会从标签自动构建、校验并把两个安装包上传到 GitHub Releases；完成后检查固定版本安装链接的版本号和 `@require` 状态。
+5. 创建与 `package.json` 一致的版本标签，例如 `git tag -a v3.13.6 -m "v3.13.6"`。
+6. 使用 `git push --atomic origin master v3.13.6` 同时推送入口与版本标签。Release 工作流会从标签自动构建、校验并把两个安装包上传到 GitHub Releases；完成后检查固定版本安装链接的版本号和 `@require` 状态。
 
 不要移动或复用已经发布的版本标签。3.12.7 起，入口自身包含对应版本的核心代码。
 
