@@ -41,7 +41,7 @@ Tripo Studio 3D 模型旋转、录屏与批量导出用户脚本。
 
 每次修改提交都要在同一提交提升 `package.json` 版本号，并执行 `npm run check`。脚本每次页面加载仍会请求 `master/runtime-status.json`：仓库公开、状态启用且当前版本不低于 `minimumVersion` 时才启动。Tampermonkey 或 Violentmonkey 会按自己的更新周期检查入口；也可以在用户脚本管理器中手动执行“检查更新”。
 
-当前版本：`3.12.9`
+当前版本：`3.12.10`
 
 修改本地仓库不会自动更新浏览器中已安装的用户脚本。发布到 `master` 后等待脚本管理器更新，或手动导入本地构建的 `tripo-model-rotation.user.js`；页面面板上的版本号可用于确认实际运行版本。更新时请停用重复安装的旧副本。
 
@@ -175,8 +175,8 @@ mp4-muxer 5.2.2 已被上游标记为 deprecated，本次保留原版本以避�
 2. 同步本文当前版本说明。CI 会逐个检查本次推送或 PR 的提交是否比各自第一父提交提升版本，并检查锁文件一致性。
 3. 执行 `npm run check`，按 `tests/MANUAL.md` 在 Tripo 实际验收。
 4. 同时提交源码、锁文件、根目录入口和 `dist/` 构建物。
-5. 创建与 `package.json` 一致的版本标签，例如 `git tag -a v3.12.9 -m "v3.12.9"`。
-6. 使用 `git push --atomic origin master v3.12.9` 同时发布入口与版本标签，随后检查 GitHub Raw 安装文件的版本号和 `@require` 状态。标签用于记录发布版本，不再作为核心加载地址。
+5. 创建与 `package.json` 一致的版本标签，例如 `git tag -a v3.12.10 -m "v3.12.10"`。
+6. 使用 `git push --atomic origin master v3.12.10` 同时发布入口与版本标签，随后检查 GitHub Raw 安装文件的版本号和 `@require` 状态。标签用于记录发布版本，不再作为核心加载地址。
 
 不要移动或复用已经发布的版本标签。3.12.7 起，入口自身包含对应版本的核心代码。
 
