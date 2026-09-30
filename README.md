@@ -16,7 +16,9 @@ Tripo Studio 3D 模型旋转、录屏与批量导出用户脚本。
 - 导出视角还原点
 - 跨多个工程的断点续跑批量导出
 
-## 全离屏透明导出（3.13.7）
+## 全离屏透明导出（3.13.8）
+
+3.13.8 修复离屏线框视频及截图忽略「线条粗细」设置的问题。线框按导出分辨率的像素宽度绘制，颜色和透明度仍按面板设置；0.5 px 等小于 1 px 的宽度通过抗锯齿透明度呈现。
 
 3.13.7 将随模型保存的灰色渐变背景图改为与当前 Tripo 网页预览区一致的深色圆形渐变：中心 `#575a5d`，90% 半径处为 `#0e0e10`。透明 MOV 和 PNG 仍可与背景图分层合成。
 
@@ -37,7 +39,7 @@ Three.js、GLTFLoader 和 Meshopt 解码器均打包进安装包，无需另外�
 
 透明 MOV 按材质逐项生成，每个角度由离屏相机定位并渲染为无损 PNG 帧，避免多路 PNG 帧同时占用过多内存。输出沿用帧率、圈数、轨迹、结束静帧、命名及保存失败恢复逻辑，每段 MOV 上限为 1 GB。
 
-独立引擎使用自己的棚拍环境光、白模材质和法线可视化，贴图模式保留可复制的自定义 shader，但不复现页面回调驱动的动态效果、私有 shader 扩展或后处理；法线输出为几何法线，不包含 PBR 法线贴图的凹凸效果。当前场景中的标准灯光仍会复制。白模提亮选项选择较亮基色，不使用网页的提亮曲线。线框使用 WebGL 原生细线，颜色和透明度有效，粗细设置不适用。输出不包含坐标轴和网页背景；模型文件保留 Alpha，灰色渐变底图单独保存。
+独立引擎使用自己的棚拍环境光、白模材质和法线可视化，贴图模式保留可复制的自定义 shader，但不复现页面回调驱动的动态效果、私有 shader 扩展或后处理；法线输出为几何法线，不包含 PBR 法线贴图的凹凸效果。当前场景中的标准灯光仍会复制。白模提亮选项选择较亮基色，不使用网页的提亮曲线。离屏线框使用三角形边缘着色器，按输出像素应用线条粗细、颜色和透明度；启用线框导出时会额外占用几何数据内存。输出不包含坐标轴和网页背景；模型文件保留 Alpha，灰色渐变底图单独保存。
 
 可按 Esc 或停止按钮取消；已保存的文件保留，未完成视频不会保存。导出不依赖网页的渲染回调或 requestAnimationFrame，但浏览器仍可能节流/冻结后台标签页，并非后台常驻服务。独立上下文会增加显存需求，高面数模型建议从 1024 分辨率开始。
 
@@ -52,9 +54,9 @@ Three.js、GLTFLoader 和 Meshopt 解码器均打包进安装包，无需另外�
 
 然后点击下面的安装链接：
 
-**[安装 Tripo Model Rotation v3.13.7](https://raw.githubusercontent.com/Ben8368/tripo-model-rotation/v3.13.7/tripo-model-rotation.user.js)**
+**[安装 Tripo Model Rotation v3.13.8](https://raw.githubusercontent.com/Ben8368/tripo-model-rotation/v3.13.8/tripo-model-rotation.user.js)**
 
-也可以打开脚本文件的 [固定版本 GitHub 页面](https://github.com/Ben8368/tripo-model-rotation/blob/v3.13.7/tripo-model-rotation.user.js)，点击 `Raw`，由用户脚本管理器接管安装。发布后的完整安装包也会作为资产放在 [GitHub Releases](https://github.com/Ben8368/tripo-model-rotation/releases/latest)。
+也可以打开脚本文件的 [固定版本 GitHub 页面](https://github.com/Ben8368/tripo-model-rotation/blob/v3.13.8/tripo-model-rotation.user.js)，点击 `Raw`，由用户脚本管理器接管安装。发布后的完整安装包也会作为资产放在 [GitHub Releases](https://github.com/Ben8368/tripo-model-rotation/releases/latest)。
 
 ## 自动更新
 
@@ -69,7 +71,7 @@ Three.js、GLTFLoader 和 Meshopt 解码器均打包进安装包，无需另外�
 
 每次修改提交都要在同一提交提升 `package.json` 版本号，并执行 `npm run check`。安装链接固定到对应版本标签，避免 GitHub Raw 的 `master` 地址在发布后的短时间内仍返回旧缓存；自动更新地址仍指向 `master`，可能有几分钟延迟。脚本每次页面加载仍会请求 `master/runtime-status.json`：仓库公开、状态启用且当前版本不低于 `minimumVersion` 时才启动。Tampermonkey 或 Violentmonkey 会按自己的更新周期检查入口；也可以在用户脚本管理器中手动执行“检查更新”。
 
-当前版本：`3.13.7`
+当前版本：`3.13.8`
 
 修改本地仓库不会自动更新浏览器中已安装的用户脚本。发布到 `master` 后等待脚本管理器更新，或手动导入本地构建的 `tripo-model-rotation.user.js`；页面面板上的版本号可用于确认实际运行版本。更新时请停用重复安装的旧副本。
 
@@ -198,8 +200,8 @@ mp4-muxer 5.2.2 已被上游标记为 deprecated，本次保留原版本以避�
 2. 同步本文当前版本说明和固定版本安装链接。CI 会逐个检查本次推送或 PR 的提交是否比各自第一父提交提升版本，并检查锁文件一致性。
 3. 执行 `npm run check`，按 `tests/MANUAL.md` 在 Tripo 实际验收。
 4. 同时提交源码、锁文件、根目录入口和 `dist/` 构建物。
-5. 创建与 `package.json` 一致的版本标签，例如 `git tag -a v3.13.7 -m "v3.13.7"`。
-6. 使用 `git push --atomic origin master v3.13.7` 同时推送入口与版本标签。Release 工作流会从标签自动构建、校验并把两个安装包上传到 GitHub Releases；完成后检查固定版本安装链接的版本号和 `@require` 状态。
+5. 创建与 `package.json` 一致的版本标签，例如 `git tag -a v3.13.8 -m "v3.13.8"`。
+6. 使用 `git push --atomic origin master v3.13.8` 同时推送入口与版本标签。Release 工作流会从标签自动构建、校验并把两个安装包上传到 GitHub Releases；完成后检查固定版本安装链接的版本号和 `@require` 状态。
 
 不要移动或复用已经发布的版本标签。3.12.7 起，入口自身包含对应版本的核心代码。
 

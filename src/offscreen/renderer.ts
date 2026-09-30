@@ -6,6 +6,7 @@ import { copyPageResources } from './resource-copy';
 import { nativeObject } from '../rotation/render-context';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { inspectGlb, glbUrl } from './plan';
+import { wireframeGeometry, wireframeMaterial } from './wireframe';
 import type { MaterialId, Settings } from '../types/settings';
 
 const MAX_GLB_BYTES = 256 * 1024 * 1024;
@@ -138,6 +139,7 @@ export class IndependentRenderer {
 
   private configureMeshes(): void {
     const nodes: THREE.Mesh[] = [];
+    const wireGeometries = new Map<THREE.BufferGeometry, THREE.BufferGeometry>();
     this.scene.traverseVisible((node: any) => {
       const materials = Array.isArray(node.material) ? node.material : [node.material];
       if (node.isMesh && (!this.camera || node.layers.test(this.camera.layers)) && materials.some(m => m?.visible)) nodes.push(node);
@@ -162,13 +164,17 @@ export class IndependentRenderer {
       const map = (normal: boolean) => Array.isArray(pbr) ? pbr.map(m => variant(m, normal)) : variant(pbr, normal);
       this.meshes.push({ mesh, pbr, solid: map(false), normal: map(true) });
       if (this.config.batchWireframeVariants) {
-        const wireVariant = (original: THREE.Material) => this.own(new THREE.MeshBasicMaterial({ color: this.config.wireframeColor,
-          visible: original.visible, side: original.side,
-          wireframe: true, transparent: true, opacity: this.config.wireframeOpacity,
-          depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }));
+        const wireVariant = (original: THREE.Material) => this.own(wireframeMaterial(
+          original, this.config.wireframeWidth, this.config.wireframeColor, this.config.wireframeOpacity));
         const wireMaterial = Array.isArray(pbr) ? pbr.map(wireVariant) : wireVariant(pbr);
-        // A shallow clone retains skinning/morph/instancing behavior and shares owned geometry.
+        // A shallow clone retains skinning/morph/instancing behavior; converted geometry is shared by overlays.
         const wire = mesh.clone(false);
+        let geometry = wireGeometries.get(mesh.geometry);
+        if (!geometry) {
+          geometry = this.own(wireframeGeometry(mesh.geometry));
+          wireGeometries.set(mesh.geometry, geometry);
+        }
+        wire.geometry = geometry;
         wire.position.set(0, 0, 0); wire.quaternion.identity(); wire.scale.set(1, 1, 1);
         wire.matrix.identity(); wire.matrixAutoUpdate = true;
         wire.material = wireMaterial; wire.visible = false;

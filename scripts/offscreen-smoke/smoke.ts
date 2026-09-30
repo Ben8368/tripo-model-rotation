@@ -6,7 +6,7 @@ import { renderFrameBatch } from '../../src/offscreen/plan';
 import { Muxer, ArrayBufferTarget } from 'mp4-muxer';
 async function run(){
  const logs=[];const assert=(ok,msg)=>{if(!ok)throw Error(msg);logs.push('PASS '+msg);document.querySelector('pre').textContent=logs.join('\n');};
- const config={...DEFAULT_SETTINGS,transparentOutput:true,batchWireframeVariants:true};
+ const config={...DEFAULT_SETTINGS,transparentOutput:true,batchWireframeVariants:true,wireframeWidth:.5,wireframeColor:'#00ff00',wireframeOpacity:1};
  const scene=new THREE.Scene();const geometry=new THREE.BoxGeometry(1,2,1);const material=new THREE.MeshStandardMaterial({color:0xd03020});
  const mesh=new THREE.Mesh(geometry,material);scene.add(mesh);scene.add(new THREE.HemisphereLight(0xffffff,0x444444,2));
  const camera=new THREE.PerspectiveCamera(35,1,.01,100);camera.position.set(0,.2,5);camera.lookAt(0,0,0);camera.updateMatrixWorld();
@@ -42,7 +42,27 @@ async function run(){
    const image=new Image();image.src=canvas.toDataURL();document.querySelector('#frames').append(image);
   }
   assert(new Set(hashes).size===3,'three distinct material passes');
-  engine.pose(1);engine.render('pbr',true);
+  const pixels=(canvas:HTMLCanvasElement)=>{
+   const gl=canvas.getContext('webgl2') as WebGL2RenderingContext;
+   const data=new Uint8Array(128*128*4);
+   gl.readPixels(0,0,128,128,gl.RGBA,gl.UNSIGNED_BYTE,data);
+   return data;
+  };
+  const changedPixels=(base:Uint8Array,wire:Uint8Array)=>{
+   let count=0;for(let i=0;i<base.length;i+=4)if(wire[i+1]>base[i+1]+2)count++;
+   return count;
+  };
+  engine.pose(1);engine.render('pbr',false);
+  const base=pixels(engine.renderer.domElement);
+  engine.render('pbr',true);
+  const thinCount=changedPixels(base,pixels(engine.renderer.domElement));
+  const thickEngine=new IndependentRenderer(128,{...config,wireframeWidth:4} as any);
+  try{
+   thickEngine.snapshot({scene,camera,renderer:native},[0,0,0]);
+   thickEngine.pose(1);thickEngine.render('pbr',true);
+   const thickCount=changedPixels(base,pixels(thickEngine.renderer.domElement));
+   assert(thinCount>0&&thickCount>thinCount*1.5,`wireframe width changes exported pixels (${thinCount} vs ${thickCount})`);
+  }finally{thickEngine.dispose();}
   assert(camera.position.toArray().join(',')===oldPosition&&mesh.material===material&&mesh.children.length===0,'source camera/material/children untouched');
   const data=await new GLTFExporter().parseAsync(scene,{binary:true});
   await loaded.load(new File([data as ArrayBuffer],'fixture.glb'),new AbortController().signal);

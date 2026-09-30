@@ -86,9 +86,30 @@ const rendererBuild=await build({entryPoints:['src/offscreen/renderer.ts'],bundl
 const rendererContext=vm.createContext({require,module:{exports:{}},exports:{},console});
 vm.runInContext(rendererBuild.outputFiles[0].text,rendererContext);
 const {IndependentRenderer}=rendererContext.module.exports;
+test('wireframe overlay uses the configured pixel width and a separate triangle geometry',()=>{
+  const engine=Object.create(IndependentRenderer.prototype);
+  Object.assign(engine,{scene:new THREE.Scene(),owned:new Set(),meshes:[],wires:[],
+    config:{batchWireframeVariants:true,wireframeWidth:.5,wireframeColor:'#123456',wireframeOpacity:.7}});
+  const source=new THREE.BoxGeometry(),material=new THREE.MeshStandardMaterial();
+  const a=new THREE.Mesh(source,material),b=new THREE.Mesh(source,material);
+  engine.scene.add(a,b);engine.configureMeshes();
+  assert.equal(engine.wires.length,2);
+  const wire=engine.wires[0],shader={uniforms:{},vertexShader:'#include <common>\n#include <begin_vertex>',fragmentShader:'#include <common>\n#include <color_fragment>'};
+  wire.material.onBeforeCompile(shader,{});
+  assert.equal(shader.uniforms.wireWidth.value,.5);
+  assert.match(shader.fragmentShader,/fwidth\(vWireBarycentric\)/);
+  assert.equal(wire.material.wireframe,false);
+  assert.equal(wire.material.opacity,.7);
+  assert.equal(wire.geometry,engine.wires[1].geometry);
+  assert.notEqual(wire.geometry,source);
+  assert.equal(wire.geometry.index,null);
+  assert.equal(wire.geometry.getAttribute('wireBarycentric').count,wire.geometry.getAttribute('position').count);
+  assert.equal(source.getAttribute('wireBarycentric'),undefined);
+  for(const item of engine.owned)item.dispose();source.dispose();material.dispose();
+});
 test('snapshot integration preserves visible shader and hides auxiliary material slots in all passes',()=>{
   const engine=Object.create(IndependentRenderer.prototype);
-  Object.assign(engine,{scene:new THREE.Scene(),owned:new Set(),meshes:[],wires:[],target:new THREE.Vector3(),startOffset:new THREE.Vector3(),startQuaternion:new THREE.Quaternion(),config:{batchWireframeVariants:true,wireframeColor:'#ffffff',wireframeOpacity:.5},renderer:{getContext:()=>({isContextLost:()=>false}),render(){},domElement:{}},studio(){}});
+  Object.assign(engine,{scene:new THREE.Scene(),owned:new Set(),meshes:[],wires:[],target:new THREE.Vector3(),startOffset:new THREE.Vector3(),startQuaternion:new THREE.Quaternion(),config:{batchWireframeVariants:true,wireframeWidth:2,wireframeColor:'#ffffff',wireframeOpacity:.5},renderer:{getContext:()=>({isContextLost:()=>false}),render(){},domElement:{}},studio(){}});
   const scene=new THREE.Scene(),shader=new THREE.ShaderMaterial(),helper=new THREE.ShaderMaterial();helper.userData.wireframe=true;
   const mesh=new THREE.Mesh(new THREE.BoxGeometry(),[shader,helper]);scene.add(mesh);
   const hidden=new THREE.Group();hidden.visible=false;hidden.add(new THREE.Mesh(new THREE.BoxGeometry(),helper));scene.add(hidden);
