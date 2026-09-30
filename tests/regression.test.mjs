@@ -11,7 +11,7 @@ const names = ['runExportAction','animateDrag','stopRotation','throwIfCancelled'
   'exportAll','takeScreenshot','startRotation','hideAxisOverlay','createCanvasFrameSource','createFrameLock',
   'switchMaterial','switchWireframe','waitForTabFrame','createTabCapture','handleScreenshotClick',
   'saveBlob','resumePendingSave','discardPendingSave','handleBeforeUnload','snapshotView','applyView',
-  'isSolidSurfaceMaterial','patchSolidFragment','applyWireframeStyle'];
+  'isSolidSurfaceMaterial','patchSolidFragment','applyWireframeStyle','prepareRecording'];
 const overrides = ['setStatus','sanitizeSettingsFromUI','requestProjectName','plannedExportItems',
   'currentMaterial','toggleIsOn','findWireframeButton','findViewerCanvas','snapshotView','findRenderContext',
   'showPanel','switchMaterial','switchWireframe','buildOutputFilename','takeScreenshot','applyView',
@@ -64,6 +64,22 @@ async function bounded(promise) {
 }
 
 for (const [variant, code] of [['unminified',plain],['minified',compiled]]) {
+
+  test(variant + ': independent recording uses supplied canvas and frozen config without page capture', async () => {
+    const {api,context}=setup(code);
+    const canvas={};const frameSource={canvas,width:128,height:128,drawFrame(){},cleanup(){}};
+    api.config.recordingScope='tab';
+    const transparent=await api.prepareRecording(null,{forceRecord:true,frameSource,config:{...api.config,transparentOutput:true,recordingFps:24}});
+    assert.equal(transparent.canvas,canvas);assert.equal(transparent.fps,24);assert.equal(transparent.format,'mov');
+    let chosen;
+    context.VideoFrame=class {};
+    context.VideoEncoder=class {
+      static async isConfigSupported(config){return {supported:true,config};}
+      configure(config){chosen=config;} close(){}
+    };
+    const mp4=await api.prepareRecording(null,{forceRecord:true,frameSource,config:{...api.config,transparentOutput:false,recordingFps:30}});
+    assert.equal(mp4.canvas,canvas);assert.equal(mp4.fps,30);assert.equal(chosen.width,128);assert.equal(chosen.height,128);
+  });
 
   function unloadPrevented(api) {
     let prevented=false;const event={preventDefault(){prevented=true;}};

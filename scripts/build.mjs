@@ -7,12 +7,15 @@ if (/^\/\/ @require\s/m.test(header)) {
 }
 const result = await build({
   entryPoints: ['src/main.ts'], bundle: true, minify: true, format: 'iife',
-  target: ['chrome109'], legalComments: 'none', sourcemap: false, write: false,
+  target: ['chrome109'], supported: { 'template-literal': false }, legalComments: 'none', sourcemap: false, write: false,
   define: { __SCRIPT_VERSION__: JSON.stringify(pkg.version) },
 });
 const license = await readFile('node_modules/mp4-muxer/LICENSE', 'utf8');
 const notice = '/*! mp4-muxer 5.2.2\n' + license.replace(/\r\n/g, '\n').trim() + '\n*/\n';
-const core = notice + result.outputFiles[0].text;
+const threeLicense = await readFile('node_modules/three/LICENSE', 'utf8');
+const threeNotice = '/*! Three.js 0.180.0\n' + threeLicense.replace(/\r\n/g, '\n').trim() + '\n*/\n';
+const meshoptNotice = '/*! MeshoptDecoder (meshoptimizer 0.22)\nCopyright (C) 2016-2024, Arseny Kapoulkine\n' + threeLicense.slice(threeLicense.indexOf('Permission is hereby granted')).replace(/\r\n/g, '\n').trim() + '\n*/\n';
+const core = notice + threeNotice + meshoptNotice + result.outputFiles[0].text;
 const standaloneHeader = header
   .split('\n')
   .filter(line => !line.startsWith('// @require'))

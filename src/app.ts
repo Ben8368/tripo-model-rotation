@@ -1,3 +1,4 @@
+import { groupOffscreenJobs, renderFrameBatch, glbUrl } from './offscreen/plan';
 import { mountAuthControls } from './auth/controls';
 import * as Mp4Muxer from 'mp4-muxer';
 import { DEFAULT_SETTINGS as DEFAULTS, normalizeSettings } from './settings/settings';
@@ -1922,12 +1923,13 @@ export function startApp(version) {
   }
 
   async function prepareRecording(canvas: any, options: any = {}) {
-    if (!settings.recordEnabled && !options.forceRecord) return null;
-    requireCanvasRecording();
-    if (settings.transparentOutput) {
+    const recordingSettings = options.config || settings;
+    if (!recordingSettings.recordEnabled && !options.forceRecord) return null;
+    if (!options.frameSource) requireCanvasRecording();
+    if (recordingSettings.transparentOutput) {
       return {
-        ...createCanvasFrameSource(canvas, false),
-        format: 'mov', samples: [], sampleBytes: 0, fps: Math.round(settings.recordingFps),
+        ...(options.frameSource || createCanvasFrameSource(canvas, false)),
+        format: 'mov', samples: [], sampleBytes: 0, fps: Math.round(recordingSettings.recordingFps),
         started: false, finalized: false, frameIndex: 0,
         outputFilename: options.outputFilename || null, outputTarget: options.outputTarget || null,
       };
@@ -1939,13 +1941,13 @@ export function startApp(version) {
       throw new Error('MP4 封装组件加载失败，请检查网络后刷新页面');
     }
 
-    const fps = Math.round(settings.recordingFps);
-    const source = settings.recordingScope === 'tab'
+    const fps = Math.round(recordingSettings.recordingFps);
+    const source = options.frameSource || (recordingSettings.recordingScope === 'tab'
       ? await createTabFrameSource(fps, canvas, options.tabCapture || null)
-      : createCanvasFrameSource(canvas);
+      : createCanvasFrameSource(canvas));
 
-    const bitrate = settings.videoBitrateMbps > 0
-      ? Math.round(settings.videoBitrateMbps * 1_000_000)
+    const bitrate = recordingSettings.videoBitrateMbps > 0
+      ? Math.round(recordingSettings.videoBitrateMbps * 1_000_000)
       : autoBitrate(source.width, source.height, fps);
     const encoderConfig = await chooseH264Config(source.width, source.height, fps, bitrate);
     const target = new Mp4Muxer.ArrayBufferTarget();
@@ -2439,6 +2441,107 @@ export function startApp(version) {
     } finally {
       tabCapture?.cleanup();
     }
+  }
+
+  async function exportIndependent(inputs: (File | string)[] | null = null) {
+    sanitizeSettingsFromUI();
+    const config = { ...settings };
+    const jobs = planBatchJobs(EXPORT_ITEMS, config, true);
+    if (!jobs.length) throw new Error('请先在导出内容菜单中选择输出项目');
+    const size = Number($('#offscreenSize').value);
+    if (![512, 1024, 2048].includes(size)) throw new Error('请选择有效的离屏分辨率');
+    const concurrency = config.transparentOutput ? 1 : 3;
+    const groups = groupOffscreenJobs(jobs, concurrency);
+    let sourceBinding = null, sourceTarget = null;
+    if (!inputs) {
+      if (currentMaterial().id !== 'pbr') throw new Error('请先在网页底部选择“贴图”模式，再复制当前模型');
+      if (toggleIsOn(findWireframeButton())) throw new Error('请先关闭网页线框；离屏线框由导出选项单独生成');
+      sourceBinding = findRenderContext(findViewerCanvas(), true);
+      sourceTarget = sourceBinding.controls.getTarget(undefined, false).toArray();
+    }
+    // Request the directory while the initiating click still has user activation.
+    const outputTarget = typeof window.showDirectoryPicker === 'function'
+      ? { kind: 'directory', handle: await window.showDirectoryPicker({ mode: 'readwrite' }) }
+      : { kind: 'download' };
+    throwIfCancelled();
+    const { IndependentRenderer } = await import('./offscreen/renderer');
+    throwIfCancelled();
+    const abort = new AbortController();
+    const cancel = () => abort.abort();
+    activeTask.cleanups.add(cancel);
+    const sources = inputs || [null];
+    let completed = 0;
+    try {
+      for (let modelIndex = 0; modelIndex < sources.length; modelIndex += 1) {
+        throwIfCancelled();
+        const source = sources[modelIndex];
+        const name = source === null ? (getProjectName() || '当前模型')
+          : typeof source === 'string' ? ('GLB-' + (modelIndex + 1)) : source.name.replace(/\.glb$/i, '');
+        setStatus('离屏加载 ' + (modelIndex + 1) + '/' + sources.length + ' · ' + name, 'running');
+        const engine = new IndependentRenderer(size, config);
+        try {
+          if (source === null) engine.snapshot(sourceBinding, sourceTarget);
+          else await engine.load(source, abort.signal);
+          throwIfCancelled();
+          for (const group of groups) {
+            throwIfCancelled();
+            const kind = group[0].kind;
+            const sessions: any[] = [];
+            try {
+              if (kind !== 'screenshot') {
+                for (const job of group) {
+                  const frameCanvas = engine.renderer.domElement;
+                  const session = await prepareRecording(frameCanvas, { forceRecord: true, config,
+                    outputTarget, outputFilename: formatOutputFilename(kind, name, job.material.label, config, job.wireframe),
+                    frameSource: { canvas: frameCanvas, width: size, height: size, drawFrame() {}, cleanup() {} } });
+                  sessions.push(session);
+                  startRecorder(session);
+                  throwIfCancelled();
+                }
+              }
+              const angles = kind === 'screenshot' ? [0] : makeFramePlan(kind, config).angles;
+              await renderFrameBatch(angles, group, {
+                check: () => throwIfCancelled(),
+                pose: angle => engine.pose(angle),
+                capture: async (job, index) => {
+                  const canvas = engine.render(job.material.id, job.wireframe);
+                  if (kind === 'screenshot') {
+                    const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob(
+                      value => value ? resolve(value) : reject(new Error('离屏 PNG 编码失败')), 'image/png'));
+                    throwIfCancelled();
+                    await saveBlob(blob, formatOutputFilename(kind, name, job.material.label, config, job.wireframe), outputTarget);
+                    completed += 1;
+                  } else {
+                    await captureDeterministicFrame(sessions[group.indexOf(job)], true);
+                  }
+                },
+                progress: async index => {
+                  if (index % 10 === 0) {
+                    setStatus('离屏 ' + (modelIndex + 1) + '/' + sources.length + ' · ' + kind + ' · ' +
+                      (index + 1) + '/' + angles.length + ' 帧 · 已保存 ' + completed + ' 文件', 'running');
+                    // Yield to input/cancellation without waiting for the page's render loop.
+                    await sleep(0);
+                  }
+                },
+              });
+              for (const session of sessions) {
+                throwIfCancelled();
+                if (session.frameIndex !== angles.length) throw new Error('离屏编码帧数不完整');
+                if (!await finalizeRecording(session, kind)) throw new Error('离屏视频保存失败');
+                completed += 1;
+              }
+            } finally {
+              for (const session of sessions) {
+                if (session.encoder && session.encoder.state !== 'closed') session.encoder.close();
+                if (session.samples) session.samples.length = 0;
+                session.cleanup();
+              }
+            }
+          }
+        } finally { engine.dispose(); }
+      }
+      setStatus('独立离屏导出完成 · 共保存 ' + completed + ' 个文件', 'ready', true);
+    } finally { activeTask?.cleanups.delete(cancel); abort.abort(); }
   }
 
   async function exportAll() {
@@ -3069,6 +3172,20 @@ export function startApp(version) {
           </div>
           <button class="stop" id="stop">立即停止</button>
           <button id="hide">隐藏面板</button>
+          <details class="capture" style="grid-column:1 / -1">
+            <summary>独立离屏 / GLB 批量导出</summary>
+            <p class="note">使用已勾选的导出内容，逐角度输出多材质。独立画面为正方形，不驱动网页相机。白模、灯光和后处理可能与网页不同。</p>
+            <label for="offscreenSize">输出分辨率</label>
+            <select id="offscreenSize"><option value="512">512 × 512</option><option value="1024" selected>1024 × 1024</option><option value="2048">2048 × 2048</option></select>
+            <button id="offscreenCurrent" type="button">复制当前贴图模型并导出</button>
+            <label for="offscreenFiles">本地 GLB（支持多选，不上传）</label>
+            <input id="offscreenFiles" type="file" accept=".glb" multiple>
+            <button id="offscreenLocal" type="button">批量导出所选 GLB</button>
+            <label for="offscreenUrls">HTTPS GLB 直链（每行一个，需支持跨域）</label>
+            <textarea id="offscreenUrls" rows="3" style="width:100%;box-sizing:border-box" placeholder="https://…/model.glb"></textarea>
+            <button id="offscreenRemote" type="button">从直链加载并导出</button>
+            <p class="note">支持普通 / Meshopt GLB、内嵌贴图。单文件最多 256MB。GLB 自动居中取景；当前模型保留观察目标。线框固定为 WebGL 细线。透明 MOV 为控制内存逐材质导出。Esc 可取消。</p>
+          </details>
           <button class="capture" id="checkFrameEntry">检查录制功能</button>
           <button class="capture" id="openProjects">已命名项目</button>
           <button class="multi-batch" id="multiBatchStart">多个项目批量导出</button>
@@ -3308,6 +3425,17 @@ export function startApp(version) {
   $('#uniform').addEventListener('click', () => void runExportAction(() => handleRotationClick('uniform')));
   $('#transition').addEventListener('click', () => void runExportAction(() => handleRotationClick('transition')));
   $('#screenshot').addEventListener('click', () => void runExportAction(handleScreenshotClick));
+  $('#offscreenCurrent').addEventListener('click', () => void runExportAction(() => exportIndependent()));
+  $('#offscreenLocal').addEventListener('click', () => void runExportAction(async () => {
+    const files = Array.from($('#offscreenFiles').files || []) as File[];
+    if (!files.length) throw new Error('请先选择一个或多个 GLB 文件');
+    await exportIndependent(files);
+  }));
+  $('#offscreenRemote').addEventListener('click', () => void runExportAction(async () => {
+    const urls = $('#offscreenUrls').value.split(/\r?\n/).map(value => value.trim()).filter(Boolean).map(glbUrl);
+    if (!urls.length) throw new Error('请先填写 GLB 直链');
+    await exportIndependent(urls);
+  }));
   $('#exportAll').addEventListener('click', () => void runExportAction(exportAll));
   ui.multiBatchStart.addEventListener('click', () => void runExportAction(startMultiProjectBatch));
   ui.multiBatchCancel.addEventListener('click', () => void cancelMultiProjectBatch());
