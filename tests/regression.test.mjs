@@ -46,7 +46,7 @@ function setup(code) {
   const context = vm.createContext({console:{info(){},warn(){},error(){}},DOMException,structuredClone,
     performance, Blob, URL, AbortController, setTimeout, clearTimeout,
     window:{setTimeout, clearTimeout}, document:{hidden:false,createElement:()=>({
-      getContext:()=>({createLinearGradient:()=>({addColorStop(){}}),fillRect(){}}),
+      getContext:()=>({createRadialGradient:()=>({addColorStop(){}}),fillRect(){}}),
       toBlob(callback){callback(new Blob(['background'],{type:'image/png'}));},
     })},
     location:{href:'https://studio.tripo3d.ai/workspace/generate/12345678-1234-4123-8123-123456789abc',pathname:'/workspace/generate/12345678-1234-4123-8123-123456789abc'},

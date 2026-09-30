@@ -1694,10 +1694,13 @@ export function startApp(version) {
     canvas.width = width;
     canvas.height = height;
     const context = canvas.getContext('2d', { alpha: false });
-    const gradient = context.createLinearGradient(0, 0, width, height);
-    gradient.addColorStop(0, '#eef0f3');
-    gradient.addColorStop(0.5, '#c7cbd2');
-    gradient.addColorStop(1, '#8a909a');
+    // Match the Tripo viewer's centered circle and its 90% dark color stop.
+    const gradient = context.createRadialGradient(
+      width / 2, height / 2, 0,
+      width / 2, height / 2, Math.hypot(width / 2, height / 2)
+    );
+    gradient.addColorStop(0, '#575a5d');
+    gradient.addColorStop(0.9, '#0e0e10');
     context.fillStyle = gradient;
     context.fillRect(0, 0, width, height);
     return new Promise((resolve, reject) => canvas.toBlob(blob => {
