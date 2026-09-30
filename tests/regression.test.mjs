@@ -11,13 +11,13 @@ const names = ['runExportAction','animateDrag','stopRotation','throwIfCancelled'
   'exportAll','takeScreenshot','startRotation','hideAxisOverlay','createCanvasFrameSource','createFrameLock',
   'switchMaterial','switchWireframe','waitForTabFrame','createTabCapture','handleScreenshotClick',
   'saveBlob','resumePendingSave','discardPendingSave','handleBeforeUnload','snapshotView','applyView',
-  'isSolidSurfaceMaterial','patchSolidFragment','applyWireframeStyle','prepareRecording','snapshotIndependentModel'];
+  'isSolidSurfaceMaterial','patchSolidFragment','applyWireframeStyle','prepareRecording','snapshotIndependentModel','exportIndependent','handleRotationClick'];
 const overrides = ['setStatus','sanitizeSettingsFromUI','requestProjectName','plannedExportItems',
   'currentMaterial','toggleIsOn','findWireframeButton','findViewerCanvas','snapshotView','findRenderContext',
   'showPanel','switchMaterial','switchWireframe','buildOutputFilename','takeScreenshot','applyView',
   'dispatchPointer','scheduleAutoShow','finalizeRecording','applySolidLook','findAxisOverlay',
   'createViewerBackgroundCanvas','createFrameLock','createCanvasFrameSource','saveBlob','chooseSingleFile',
-  'requestBatchCaptureStart','createTabCapture'];
+  'requestBatchCaptureStart','createTabCapture','exportIndependent','snapshotIndependentModel','createIndependentRenderer','prepareRecording','captureDeterministicFrame','recordExportRestorePoint','sleep'];
 // Transitional JS integration harness. TS modules are tested via exports in logic.test.mjs.
 assert(harnessSource.includes("  const host = document.createElement('div');"));
 assert(harnessSource.includes('export function startApp(version) {'));
@@ -44,7 +44,7 @@ const plain = await buildHarness(false);
 function setup(code) {
   const raf = new Map(); let id=0;
   const context = vm.createContext({console:{info(){},warn(){},error(){}},DOMException,structuredClone,
-    performance, Blob, URL, setTimeout, clearTimeout,
+    performance, Blob, URL, AbortController, setTimeout, clearTimeout,
     window:{setTimeout, clearTimeout}, document:{hidden:false},
     location:{href:'https://studio.tripo3d.ai/workspace/generate/12345678-1234-4123-8123-123456789abc',pathname:'/workspace/generate/12345678-1234-4123-8123-123456789abc'},
     localStorage:{getItem:()=>null,setItem(){},removeItem(){}}, navigator:{},
@@ -107,6 +107,46 @@ for (const [variant, code] of [['unminified',plain],['minified',compiled]]) {
         await assert.rejects(api.snapshotIndependentModel({snapshot(){copied=true;}}),cancel?/停止/:/load failed/);
       });
       assert.equal(copied,false);assert.deepEqual(restored,['solid','wire','view']);
+    }
+  });
+
+  test(variant + ': default rotation buttons and forced video jobs route to offscreen, without native rotation', async () => {
+    const {api}=setup(code);const calls=[];
+    api.override({sanitizeSettingsFromUI(){},currentMaterial:()=>({id:'normal',label:'法线'}),
+      toggleIsOn:()=>true,findWireframeButton:()=>({}),exportIndependent:async (inputs,options)=>{calls.push(options);return 'saved.mp4';},
+      findViewerCanvas(){throw Error('native rotation must not run');},
+      requestProjectName:async()=> 'demo',recordExportRestorePoint(){},buildOutputFilename:()=> 'demo.mp4',chooseSingleFile:async()=>({kind:'file'}),
+    });
+    for(const mode of ['uniform','transition'])await api.handleRotationClick(mode);
+    api.config.recordEnabled=false;
+    assert.equal(await api.startRotation('uniform',{forceRecord:true,outputFilename:'forced.mp4'}),'saved.mp4');
+    assert.deepEqual(calls.map(o=>o.jobs[0].kind),['uniform','transition','uniform']);
+    assert(calls.every(o=>o.jobs[0].material.id==='normal'&&o.jobs[0].wireframe));
+    assert.equal(calls[0].outputTarget.kind,'file');assert.equal(calls[2].outputFilename,'forced.mp4');
+  });
+  test(variant + ': default batch forwards all selected jobs once and never runs native screenshot/material loops', async () => {
+    const {api}=setup(code);const jobs=['solid','pbr','normal'].map(id=>({key:'uniform:'+id,kind:'uniform',material:{id,label:id},wireframe:false}));let called=0;
+    api.override({sanitizeSettingsFromUI(){},requestProjectName:async()=> 'demo',plannedExportItems:()=>jobs,recordExportRestorePoint(){},
+      exportIndependent:async(inputs,options)=>{called++;assert.equal(inputs,null);assert.equal(options.jobs,jobs);assert.equal(options.projectName,'demo');return 'last.mp4';},
+      switchMaterial(){throw Error('native material loop');},takeScreenshot(){throw Error('native capture');},
+    });
+    await api.runExportAction(()=>api.exportAll());assert.equal(called,1);assert.equal(api.busy,false);
+  });
+  test(variant + ': grouped offscreen export copies once, checkpoints ordered files, and disposes on failure', async () => {
+    for(const fail of [false,true]){
+      const {api}=setup(code);let copies=0,disposed=0,poses=0;const saves=[];const outputs=[];
+      const jobs=['pbr','solid','normal'].map(id=>({key:'uniform:'+id,kind:'uniform',material:{id,label:id},wireframe:false}));
+      api.override({findViewerCanvas:()=>({}),createIndependentRenderer:async()=>({renderer:{domElement:{}},pose(){poses++;},render(){},dispose(){disposed++;}}),
+        snapshotIndependentModel:async()=>{copies++;},prepareRecording:async(c,o)=>({frameIndex:0,outputFilename:o.outputFilename,cleanup(){}}),
+        captureDeterministicFrame:async(session)=>{if(fail)throw Error('encode failed');session.frameIndex++;},
+        finalizeRecording:async(session)=>{outputs.push(session.frameIndex);return session.outputFilename;},sleep:async()=>{},
+      });
+      const options={jobs,config:{...api.config,uniformDuration:.5,recordingFps:15,settleDuration:0},size:512,
+        projectName:'test',outputTarget:{kind:'directory'},checkpointOrder:true,onSaved:name=>saves.push(name)};
+      if(fail)await assert.rejects(api.exportIndependent(null,options),/encode failed/);
+      else {await api.exportIndependent(null,options);assert.equal(saves.length,3);assert.deepEqual(outputs,[8,8,8]);assert.equal(poses,8);}
+      assert.equal(copies,1);assert.equal(disposed,1);
+      if(fail)assert.equal(saves.length,0);
     }
   });
 
@@ -182,10 +222,11 @@ for (const [variant, code] of [['unminified',plain],['minified',compiled]]) {
   });
   test(`${variant}: batch stop prevents remaining jobs and restores original state`,async()=>{
     const {api}=setup(code);let saved=0;const restored=[];
+    api.config.recordingScope='tab';
     api.override({sanitizeSettingsFromUI(){},requestProjectName:async()=> 'demo',
       plannedExportItems:()=>[1,2,3].map(()=>({kind:'screenshot',material:{id:'pbr',label:'pbr'},wireframe:false})),
       currentMaterial:()=>({id:'solid'}),toggleIsOn:()=>true,findWireframeButton(){},
-      findViewerCanvas:()=>({width:1,height:1,getBoundingClientRect:()=>({width:1,height:1})}),snapshotView:()=>({width:1,height:1,signature:[]}),findRenderContext:()=>({camera:{type:'perspective'}}),showPanel(){},
+      findViewerCanvas:()=>({width:1,height:1,getBoundingClientRect:()=>({width:1,height:1})}),snapshotView:()=>({width:1,height:1,signature:[]}),findRenderContext:()=>({camera:{type:'perspective'}}),showPanel(){},requestBatchCaptureStart:async()=>true,createTabCapture:async()=>({cleanup(){}}),
       switchMaterial:async(m,restore)=>{if(restore)restored.push(m.id);},
       switchWireframe:async(w,restore)=>{if(restore)restored.push(w);},
       buildOutputFilename:()=> 'demo.png',applyView(){restored.push('view');},
