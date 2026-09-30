@@ -42,10 +42,11 @@ const plain = await buildHarness(false);
 
 function setup(code) {
   const raf = new Map(); let id=0;
-  const context = vm.createContext({console:{info(){},warn(){},error(){}},DOMException,
+  const context = vm.createContext({console:{info(){},warn(){},error(){}},DOMException,structuredClone,
     performance, Blob, URL, setTimeout, clearTimeout,
     window:{setTimeout, clearTimeout}, document:{hidden:false},
-    localStorage:{getItem:()=>null}, navigator:{},
+    location:{href:'https://studio.tripo3d.ai/workspace/generate/12345678-1234-4123-8123-123456789abc',pathname:'/workspace/generate/12345678-1234-4123-8123-123456789abc'},
+    localStorage:{getItem:()=>null,setItem(){},removeItem(){}}, navigator:{},
     requestAnimationFrame(cb){raf.set(++id,cb);return id;},
     cancelAnimationFrame(i){raf.delete(i);},
   });
@@ -138,7 +139,7 @@ for (const [variant, code] of [['unminified',plain],['minified',compiled]]) {
     api.override({sanitizeSettingsFromUI(){},requestProjectName:async()=> 'demo',
       plannedExportItems:()=>[1,2,3].map(()=>({kind:'screenshot',material:{id:'pbr',label:'pbr'},wireframe:false})),
       currentMaterial:()=>({id:'solid'}),toggleIsOn:()=>true,findWireframeButton(){},
-      findViewerCanvas:()=>({}),snapshotView:()=>({}),findRenderContext:()=>({}),showPanel(){},
+      findViewerCanvas:()=>({width:1,height:1,getBoundingClientRect:()=>({width:1,height:1})}),snapshotView:()=>({width:1,height:1,signature:[]}),findRenderContext:()=>({camera:{type:'perspective'}}),showPanel(){},
       switchMaterial:async(m,restore)=>{if(restore)restored.push(m.id);},
       switchWireframe:async(w,restore)=>{if(restore)restored.push(w);},
       buildOutputFilename:()=> 'demo.png',applyView(){restored.push('view');},
@@ -193,6 +194,8 @@ for (const [variant, code] of [['unminified',plain],['minified',compiled]]) {
     const {api}=setup(code);const order=[];
     api.config.recordingScope='tab';
     api.override({sanitizeSettingsFromUI(){},requestProjectName:async()=> 'demo',
+      findViewerCanvas:()=>({width:1,height:1,getBoundingClientRect:()=>({width:1,height:1})}),
+      snapshotView:()=>({width:1,height:1,signature:[]}),findRenderContext:()=>({camera:{type:'perspective'}}),
       currentMaterial:()=>({label:'pbr'}),findWireframeButton(){},toggleIsOn:()=>false,
       chooseSingleFile:async()=>{order.push('picker');return {};},
       requestBatchCaptureStart:async()=>{order.push('fresh click');return true;},

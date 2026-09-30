@@ -14,6 +14,10 @@ for (const minify of [false, true]) {
         export { validProjectUrl } from './projects/project-url';
         export { createProjectStorage, parseProjectNames, parseProjectLibrary, projectNameFor, rememberProject } from './storage/project-library';
         export { planBatchJobs, selectedBatchItems } from './batch/plan';
+        export { parseRestorePoints, restorePointsForWrite, parseMultiProjectSession,
+          createMultiProjectSession, planMultiProjectJobs, preserveCheckboxState,
+          cancelMultiProjectSession, completeMultiProjectSession,
+          runRestoreTransaction } from './batch/multi-project';
         export { EXPORT_ITEMS } from './settings/catalog';`,
       resolveDir: fileURLToPath(new URL('../src/', import.meta.url)),
     },
@@ -103,6 +107,85 @@ for (const minify of [false, true]) {
       assert.equal(api.validProjectUrl(value, id), null);
     }
     assert.equal(api.validProjectUrl(base, 'other-id'), null);
+  });
+  test(`${variant}: malformed restore-point storage fails closed before writes`, () => {
+    const corrupt = '{\ninvalid json';
+    assert.deepEqual(api.parseRestorePoints(corrupt), {}); // Safe for read-only display.
+    assert.throws(() => api.restorePointsForWrite(corrupt), /为避免覆盖已有记录/);
+    assert.throws(() => api.restorePointsForWrite('[]'), /为避免覆盖已有记录/);
+    const storage = { raw: corrupt };
+    assert.throws(() => { const points = api.restorePointsForWrite(storage.raw); storage.raw = JSON.stringify(points); }, /为避免覆盖已有记录/);
+    assert.equal(storage.raw, corrupt);
+    assert.deepEqual(api.restorePointsForWrite(null), {});
+  });
+  test(`${variant}: cross-project sessions validate frozen jobs and resume indexes`, () => {
+    const id = '12345678-1234-4123-8123-123456789abc';
+    const point = { id: 'rp1', projectId: id, url: `https://studio.tripo3d.ai/workspace/generate/${id}`,
+      createdAt: '2026-01-01T00:00:00.000Z', kind: 'manual', view: { width: 800, height: 600 }, settings: {} };
+    const settings = api.normalizeSettings({});
+    const session = api.createMultiProjectSession('batch1', [point, { ...point, id: 'rp2', projectId: '22345678-1234-4123-8123-123456789abc', url: 'https://studio.tripo3d.ai/workspace/generate/22345678-1234-4123-8123-123456789abc' }],
+      ['screenshot:solid', 'uniform:pbr'], settings, true);
+    session.activeJobs = api.planMultiProjectJobs(api.EXPORT_ITEMS, session.itemKeys, true);
+    session.pointIndex = 0; session.jobIndex = 2; session.completedFiles = 2;
+    const resumed = api.parseMultiProjectSession(JSON.stringify(session));
+    assert.equal(resumed.pointIndex, 0); assert.equal(resumed.jobIndex, 2);
+    assert.deepEqual(resumed.activeJobs, session.activeJobs);
+    assert.equal(resumed.completedFiles, 2);
+    const legacy = { ...session }; delete legacy.activeJobs;
+    const migrated = api.parseMultiProjectSession(JSON.stringify(legacy));
+    assert.equal(migrated.jobIndex, 2); assert.deepEqual(migrated.activeJobs, session.activeJobs);
+    assert.equal(api.parseMultiProjectSession(JSON.stringify({ ...session, pointIndex: 3 })), null);
+    assert.equal(api.parseMultiProjectSession(JSON.stringify({ ...session, activeJobs: [{ key: 'bad', wireframe: true }] })), null);
+  });
+  test(`${variant}: unsupported wireframe capability keeps ordinary jobs`, () => {
+    const jobs = api.planMultiProjectJobs(api.EXPORT_ITEMS, ['screenshot:solid'], false);
+    assert.deepEqual(jobs, [{ key: 'screenshot:solid', wireframe: false }]);
+  });
+  test(`${variant}: checkbox state is restored after link click cancellation`, () => {
+    let checked = false;
+    const storage = new Set();
+    const click = () => {
+      checked = !checked; // Browser pre-activation toggle.
+      const intended = checked;
+      checked = !checked; // preventDefault rollback in Chrome.
+      api.preserveCheckboxState(intended, value => {
+        checked = value;
+        if (value) storage.add('asset'); else storage.delete('asset');
+      });
+    };
+    click(); assert.equal(checked, true); assert(storage.has('asset'));
+    click(); assert.equal(checked, false); assert.equal(storage.has('asset'), false);
+  });
+  test(`${variant}: cancelling removes persisted work and handle and stops active export`, async () => {
+    const id = '12345678-1234-4123-8123-123456789abc';
+    const point = { id: 'rp', projectId: id, url: `https://studio.tripo3d.ai/workspace/generate/${id}`, view: { width: 1, height: 1 } };
+    const session = api.createMultiProjectSession('batch-cancel', [point], ['screenshot:solid'], api.normalizeSettings({}), false);
+    let stored = session; let stopped = false; const deletedHandles = [];
+    await api.cancelMultiProjectSession(session,
+      value => { assert.equal(value.status, 'cancelled'); stored = value; },
+      () => { stopped = true; },
+      () => { stored = null; },
+      async key => { deletedHandles.push(key); });
+    assert.equal(session.status, 'cancelled'); assert.equal(stopped, true);
+    assert.equal(stored, null); assert.deepEqual(deletedHandles, ['batch-cancel']);
+  });
+  test(`${variant}: successful cross-project completion removes session and directory handle`, async () => {
+    const id = '12345678-1234-4123-8123-123456789abc';
+    const point = { id: 'rp', projectId: id, url: `https://studio.tripo3d.ai/workspace/generate/${id}`, view: { width: 1, height: 1 } };
+    const session = api.createMultiProjectSession('batch-complete', [point], ['screenshot:solid'], api.normalizeSettings({}), false);
+    session.completedFiles = 3;
+    let stored = session; const removed = [];
+    await api.completeMultiProjectSession(session, () => { stored = null; }, async key => removed.push(key));
+    assert.equal(stored, null); assert.deepEqual(removed, ['batch-complete']); assert.equal(session.completedFiles, 3);
+  });
+  test(`${variant}: failed restore rolls view, settings and raw storage back`, () => {
+    const state = { view: 'before', settings: { turns: 2 }, raw: '{"old":true}', busy: false };
+    const before = structuredClone(state);
+    assert.throws(() => api.runRestoreTransaction(() => {
+      state.busy = true; state.view = 'partially-restored'; state.settings = { turns: 9 }; state.raw = '{bad';
+      throw new Error('camera signature mismatch');
+    }, () => Object.assign(state, before)), /camera signature mismatch/);
+    assert.deepEqual(state, before);
   });
   test(`${variant}: project-library storage parsing drops invalid records and keeps newest first`, () => {
     const id = '12345678-1234-4123-8123-123456789abc';

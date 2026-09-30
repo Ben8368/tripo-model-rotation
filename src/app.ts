@@ -11,7 +11,9 @@ import type { Settings } from './types/settings';
 import { planBatchJobs, selectedBatchItems } from './batch/plan';
 import { createProjectStorage, projectNameFor, rememberProject } from './storage/project-library';
 import { createMultiProjectSession, flattenRestorePoints, parseMultiProjectSession,
-  parseRestorePoints, parseSelectedAssets, planMultiProjectJobs } from './batch/multi-project';
+  parseRestorePoints, parseSelectedAssets, planMultiProjectJobs, restorePointsForWrite,
+  preserveCheckboxState, cancelMultiProjectSession, completeMultiProjectSession,
+  runRestoreTransaction } from './batch/multi-project';
 import type { ExportRestorePoint, MultiProjectBatchSession, SelectedProjectAsset } from './types/settings';
 
 /** @param {string} version */
@@ -47,6 +49,7 @@ export function startApp(version) {
   let ui = null;
   let multiBatchResumeStarted = false;
   let multiBatchNavigating = false;
+  const cleanedMultiBatchIds = new Set<string>();
 
   function loadRestorePoints(): Record<string, ExportRestorePoint[]> {
     return parseRestorePoints(readStorage(RESTORE_POINTS_KEY));
@@ -54,6 +57,10 @@ export function startApp(version) {
 
   function saveRestorePoints(store: Record<string, ExportRestorePoint[]>): boolean {
     return writeStorage(RESTORE_POINTS_KEY, JSON.stringify(store));
+  }
+
+  function loadRestorePointsForWrite(): Record<string, ExportRestorePoint[]> {
+    return restorePointsForWrite(readStorage(RESTORE_POINTS_KEY));
   }
 
   function loadSelectedAssets(): SelectedProjectAsset[] {
@@ -65,7 +72,11 @@ export function startApp(version) {
   }
 
   function loadMultiBatchSession(): MultiProjectBatchSession | null {
-    return parseMultiProjectSession(readStorage(MULTI_BATCH_KEY));
+    const raw = readStorage(MULTI_BATCH_KEY);
+    if (!raw?.trim()) return null;
+    const session = parseMultiProjectSession(raw);
+    if (!session) throw new Error('跨工程批量任务数据无效；为避免错误续跑，已停止任务');
+    return session;
   }
 
   function saveMultiBatchSession(session: MultiProjectBatchSession | null): boolean {
@@ -75,10 +86,13 @@ export function startApp(version) {
     return writeStorage(MULTI_BATCH_KEY, JSON.stringify(session));
   }
 
+  function persistMultiBatchSession(session: MultiProjectBatchSession | null): void {
+    if (!saveMultiBatchSession(session)) throw new Error('跨工程批量状态无法保存');
+  }
+
   function recordExportRestorePoint(kind: ExportRestorePoint['kind'], itemCount = 1): ExportRestorePoint | null {
-    try {
-      const canvas = findViewerCanvas();
-      if (!canvas) return null;
+      const canvas = findViewerCanvas() as HTMLCanvasElement | null;
+      if (!canvas) throw new Error('无法记录还原点：模型画面尚未加载');
       const binding = findRenderContext(canvas);
       const view = snapshotView(binding);
       const point: ExportRestorePoint = {
@@ -88,15 +102,20 @@ export function startApp(version) {
         cameraType: binding.camera.type, canvasCssSize: [canvas.getBoundingClientRect().width, canvas.getBoundingClientRect().height],
         view: view as unknown as Record<string, unknown>, settings: structuredClone(settings),
       };
-      const store = loadRestorePoints();
+      const store = loadRestorePointsForWrite();
       store[point.projectId] = [point, ...(store[point.projectId] || [])].slice(0, 20);
-      if (!saveRestorePoints(store)) throw new Error('还原点无法保存');
+      if (!saveRestorePoints(store)) throw new Error('还原点无法保存；已停止导出');
       renderRestorePoints();
       return point;
-    } catch (error) {
-      console.warn('[Tripo Rotation] 记录导出还原点失败', error);
-      return null;
-    }
+  }
+
+  function recordManualRestorePoint(): void {
+    if (projectSwitchBlocked()) { setStatus('导出进行中，不能记录还原点', 'warning'); return; }
+    try {
+      sanitizeSettingsFromUI();
+      recordExportRestorePoint('manual');
+      setStatus('已记录当前工程的导出还原点', 'ready', true);
+    } catch (error) { setStatus(`记录导出还原点失败：${error.message}`, 'error'); }
   }
 
   function renderRestorePoints() {
@@ -121,19 +140,66 @@ export function startApp(version) {
 
   function restoreExportPoint(id: string): boolean {
     if (projectSwitchBlocked()) return false;
-    const point = (loadRestorePoints()[currentProjectId()] || []).find(item => item.id === id);
+    let point: ExportRestorePoint;
+    try { point = (loadRestorePoints()[currentProjectId()] || []).find(item => item.id === id); }
+    catch (error) { setStatus(`读取还原点失败：${error.message}`, 'error'); return false; }
     if (!point) { setStatus('还原点不属于当前工程或记录已损坏', 'error'); return false; }
+    let binding: any = null;
+    let previousView: any = null;
+    let previousStoredSettings: string | null = null;
+    const previousSettings = settings;
+    let settingsWritten = false;
     try {
-      const canvas = findViewerCanvas();
+      const canvas = findViewerCanvas() as HTMLCanvasElement | null;
       if (!canvas) throw new Error('模型画面尚未加载');
-      const binding = findRenderContext(canvas);
-      if (point.cameraType && binding.camera.type !== point.cameraType) throw new Error('相机类型已变化，无法精确还原');
-      applyView(binding, point.view as any);
-      settings = normalizeSettings(point.settings);
-      saveSettings(); syncUI(); applyLightingPreset(); applySolidLook(); binding.manager.invalidate();
-      setStatus('已还原导出视角与设置', 'ready', true);
+      previousStoredSettings = localStorage.getItem(STORAGE_KEY);
+      binding = findRenderContext(canvas);
+      previousView = snapshotView(binding);
+      if (currentProjectId() !== point.projectId) throw new Error('工程编号已变化，无法还原');
+      if (binding.camera.type !== point.cameraType) throw new Error('相机类型已变化，无法精确还原');
+      if (canvas.width !== (point.view as any).width || canvas.height !== (point.view as any).height)
+        throw new Error(`画布尺寸不同：记录为 ${(point.view as any).width}×${(point.view as any).height}，当前为 ${canvas.width}×${canvas.height}`);
+      const rect = canvas.getBoundingClientRect();
+      if (point.canvasCssSize && (Math.abs(rect.width - point.canvasCssSize[0]) > 0.5 || Math.abs(rect.height - point.canvasCssSize[1]) > 0.5))
+        throw new Error('模型画面在页面中的尺寸已变化，无法保证完全对齐');
+      binding.controls.stop?.();
+      const signature = applyView(binding, point.view as any);
+      assertSignature(signature, (point.view as any).signature, '还原点相机矩阵');
+      const restored = normalizeSettings(point.settings);
+      if (!restored || typeof restored !== 'object' || !Number.isFinite(restored.configVersion)) throw new Error('还原点设置无效');
+      if (!point.settings || typeof point.settings !== 'object' || Array.isArray(point.settings) ||
+          Object.keys(point.settings).some(key => key in DEFAULTS && typeof point.settings[key] !== typeof DEFAULTS[key]) ||
+          !Array.isArray(point.settings.batchItems) || point.settings.batchItems.some(key => !EXPORT_ITEMS.some(item => item.key === key)))
+        throw new Error('还原点设置无效');
+      settings = restored;
+      settingsWritten = true;
+      if (!saveSettings()) throw new Error('设置无法保存');
+      syncUI(); syncBatchSelection(); applyLightingPreset(); applySolidLook(); binding.manager.invalidate();
+      setStatus('已精确还原导出视角与设置', 'ready', true);
       return true;
-    } catch (error) { setStatus(`还原失败：${error.message}`, 'error'); return false; }
+    } catch (error) {
+      try {
+        runRestoreTransaction(() => { throw error; }, () => {
+          if (binding && previousView) {
+            try {
+              const signature = applyView(binding, previousView);
+              assertSignature(signature, previousView.signature, '回滚相机矩阵');
+              binding.manager.invalidate();
+            } catch (rollbackError) { console.error('[Tripo Rotation] 还原失败且相机回滚失败', rollbackError); }
+          }
+          settings = previousSettings;
+          if (settingsWritten) {
+            try {
+              if (previousStoredSettings === null) localStorage.removeItem(STORAGE_KEY);
+              else localStorage.setItem(STORAGE_KEY, previousStoredSettings);
+            } catch (rollbackError) { console.error('[Tripo Rotation] 还原失败且本地设置回滚失败', rollbackError); }
+          }
+          try { syncUI(); syncBatchSelection(); applyLightingPreset(); applySolidLook(); }
+          catch (rollbackError) { console.error('[Tripo Rotation] 还原失败且界面/画面回滚失败', rollbackError); }
+        }, rollbackError => console.error('[Tripo Rotation] 还原失败且回滚失败', rollbackError));
+      } catch (originalError) { setStatus(`还原失败：${originalError.message}`, 'error'); return false; }
+      return false;
+    }
   }
 
   function assetCards() {
@@ -156,11 +222,16 @@ export function startApp(version) {
         checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.className = 'tripo-batch-asset-check';
         checkbox.title = '加入跨工程批量导出'; checkbox.setAttribute('aria-label', '加入跨工程批量导出');
         checkbox.style.cssText = 'position:absolute;left:6px;top:6px;z-index:20;width:18px;height:18px;accent-color:#765cff;';
+        checkbox.addEventListener('pointerdown', event => event.stopPropagation());
         checkbox.addEventListener('click', event => {
+          const checked = checkbox.checked;
           event.preventDefault(); event.stopPropagation();
-          const assets = loadSelectedAssets().filter(asset => asset.projectId !== projectId);
-          if (checkbox.checked) assets.push({ projectId, url: validProjectUrl(link.href, projectId)!, label: link.querySelector('img')?.alt || undefined });
-          saveSelectedAssets(assets); renderMultiBatchStatus();
+          window.setTimeout(() => preserveCheckboxState(checked, intended => {
+            checkbox.checked = intended;
+            const assets = loadSelectedAssets().filter(asset => asset.projectId !== projectId);
+            if (intended) assets.push({ projectId, url: validProjectUrl(link.href, projectId)!, label: link.querySelector('img')?.alt || undefined });
+            saveSelectedAssets(assets); renderMultiBatchStatus();
+          }), 0);
         });
         link.style.position ||= 'relative'; link.appendChild(checkbox);
       }
@@ -170,10 +241,18 @@ export function startApp(version) {
 
   function renderMultiBatchStatus() {
     if (!ui?.multiBatchStatus) return;
-    const session = loadMultiBatchSession();
+    let session: MultiProjectBatchSession | null;
+    try { session = loadMultiBatchSession(); }
+    catch (error) {
+      ui.multiBatchStatus.textContent = error.message;
+      if (ui.multiBatchStart) { ui.multiBatchStart.textContent = '跨工程批量导出'; ui.multiBatchStart.disabled = true; }
+      if (ui.multiBatchCancel) ui.multiBatchCancel.hidden = true;
+      return;
+    }
     const assets = loadSelectedAssets();
     ui.multiBatchStatus.textContent = session ? `跨工程批量：${session.status} · ${session.pointIndex}/${session.points.length} 个工程 · 已保存 ${session.completedFiles} 个文件` : `已选择 ${assets.length} 个工程`;
     if (ui.multiBatchStart) ui.multiBatchStart.textContent = session ? '继续跨工程批量' : '跨工程批量导出';
+    if (ui.multiBatchStart) ui.multiBatchStart.disabled = Boolean(session && session.status === 'running');
     if (ui.multiBatchCancel) ui.multiBatchCancel.hidden = !session || session.status === 'cancelled';
   }
 
@@ -199,23 +278,64 @@ export function startApp(version) {
     } finally { db.close(); }
   }
 
-  async function waitForProjectView(point: ExportRestorePoint): Promise<any> {
-    const deadline = Date.now() + 30_000;
+  async function removeMultiBatchDirectory(id: string): Promise<void> {
+    if (cleanedMultiBatchIds.has(id)) return;
+    cleanedMultiBatchIds.add(id);
+    try {
+      const db = await openMultiBatchDb();
+      try { await new Promise<void>((resolve, reject) => {
+        const request = db.transaction('handles', 'readwrite').objectStore('handles').delete(id);
+        request.onsuccess = () => resolve();
+        request.onerror = () => reject(request.error || new Error('文件夹句柄清理失败'));
+      }); } finally { db.close(); }
+    } catch (error) { cleanedMultiBatchIds.delete(id); throw error; }
+  }
+
+  async function waitForProjectView(point: ExportRestorePoint, sessionId: string): Promise<any> {
+    const deadline = Date.now() + 90_000;
+    let pending = '等待模型画面';
+    let layoutKey = '';
+    let stableSince = 0;
+    let wrongSizeSince = 0;
+    const report = message => setStatus(`跨工程 ${point.projectId.slice(0, 8)} · ${message}`, 'running');
     while (Date.now() < deadline) {
-      if (currentProjectId() === point.projectId) {
-        const canvas = findViewerCanvas();
-        if (canvas) {
-          try {
-            const binding = findRenderContext(canvas);
-            applyView(binding, point.view as any);
-            binding.manager.invalidate();
-            return { canvas, binding, view: point.view };
-          } catch { /* viewer is still mounting */ }
-        }
+      const session = loadMultiBatchSession();
+      if (!session || session.id !== sessionId || session.status !== 'running') throw new Error('跨工程批量任务已取消');
+      if (currentProjectId() !== point.projectId) {
+        pending = '等待目标工程'; report(pending); await sleep(250, null); continue;
       }
-      await sleep(250, null);
+      const canvas = findViewerCanvas() as HTMLCanvasElement | null;
+      if (!canvas) { pending = '等待模型画面'; report(pending); await sleep(250, null); continue; }
+      let binding;
+      try { binding = findRenderContext(canvas); }
+      catch (error) { pending = `等待渲染器（${error.message}）`; report(pending); await sleep(250, null); continue; }
+      if (!MATERIALS.every(material => { const button = findMaterialButton(material.id); return button?.isConnected && !button.disabled; })) {
+        pending = '等待模型与材质栏加载'; report(pending); await sleep(250, null); continue;
+      }
+      const rect = canvas.getBoundingClientRect();
+      const key = [canvas.width, canvas.height, rect.width.toFixed(2), rect.height.toFixed(2), binding.camera.type].join(':');
+      if (key !== layoutKey) { layoutKey = key; stableSince = Date.now(); wrongSizeSince = 0; }
+      const view = point.view as any;
+      if (canvas.width !== view.width || canvas.height !== view.height) {
+        if (!wrongSizeSince) wrongSizeSince = Date.now();
+        pending = `等待页面布局稳定（当前 ${canvas.width}×${canvas.height} → 记录 ${view.width}×${view.height}）`; report(pending);
+        if (Date.now() - stableSince >= 8_000 && Date.now() - wrongSizeSince >= 8_000)
+          throw new Error(`页面已加载，但画布尺寸不同：记录尺寸 ${view.width}×${view.height}，当前尺寸 ${canvas.width}×${canvas.height}`);
+        await sleep(250, null); continue;
+      }
+      if (binding.camera.type !== point.cameraType) throw new Error(`页面已加载，但相机类型已由 ${point.cameraType} 变为 ${binding.camera.type}`);
+      if (point.canvasCssSize && (Math.abs(rect.width - point.canvasCssSize[0]) > 0.5 || Math.abs(rect.height - point.canvasCssSize[1]) > 0.5))
+        throw new Error(`页面已加载，但 Canvas CSS 尺寸不同：记录 ${point.canvasCssSize[0].toFixed(1)}×${point.canvasCssSize[1].toFixed(1)}，当前 ${rect.width.toFixed(1)}×${rect.height.toFixed(1)}`);
+      if (Date.now() - stableSince < 750) { pending = '画面尺寸已匹配，正在确认稳定'; report(pending); await sleep(150, null); continue; }
+      report('页面已加载，正在精确还原视角');
+      binding.controls.stop?.();
+      const signature = applyView(binding, point.view as any);
+      assertSignature(signature, (point.view as any).signature, '批量导出点相机矩阵');
+      binding.manager.invalidate();
+      await nextRenderedFrame();
+      return { canvas, binding, view: point.view };
     }
-    throw new Error('等待模型预览器加载超时');
+    throw new Error(`等待页面加载超时：${pending}`);
   }
 
   async function startMultiProjectBatch() {
@@ -224,13 +344,14 @@ export function startApp(version) {
     requireCanvasRecording();
     if (typeof window.showDirectoryPicker !== 'function') throw new Error('当前浏览器不支持选择文件夹，请使用新版 Chrome 或 Edge');
     let session = loadMultiBatchSession();
-    const directory = await window.showDirectoryPicker({ mode: 'readwrite' });
     if (session) {
+      const directory = await window.showDirectoryPicker({ mode: 'readwrite' });
       await storeMultiBatchDirectory(session.id, directory);
-      session.status = 'running'; session.error = ''; saveMultiBatchSession(session);
+      session.status = 'running'; session.error = ''; persistMultiBatchSession(session);
     } else {
       const assets = loadSelectedAssets();
       if (!assets.length) throw new Error('请先在资产卡片上勾选要批量导出的模型');
+      loadRestorePointsForWrite();
       const allPoints = flattenRestorePoints(loadRestorePoints());
       const points = assets.map(asset => allPoints.find(point => point.projectId === asset.projectId)).filter(Boolean) as ExportRestorePoint[];
       if (points.length !== assets.length) throw new Error('部分模型没有导出还原点，请先逐个打开模型并导出一次');
@@ -238,7 +359,8 @@ export function startApp(version) {
       if (!itemKeys.length) throw new Error('请先在一键导出菜单中选择文件类型');
       const id = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
       session = createMultiProjectSession(id, points, itemKeys, settings, settings.batchWireframeVariants);
-      await storeMultiBatchDirectory(id, directory); saveMultiBatchSession(session);
+      const directory = await window.showDirectoryPicker({ mode: 'readwrite' });
+      await storeMultiBatchDirectory(id, directory); persistMultiBatchSession(session);
     }
     void continueMultiProjectBatch();
   }
@@ -246,12 +368,15 @@ export function startApp(version) {
   async function continueMultiProjectBatch() {
     if (multiBatchResumeStarted) return;
     multiBatchResumeStarted = true;
-    let session = loadMultiBatchSession();
+    let session: MultiProjectBatchSession | null;
+    try { session = loadMultiBatchSession(); }
+    catch (error) { multiBatchResumeStarted = false; setStatus(error.message, 'error'); renderMultiBatchStatus(); return; }
     if (!session || session.status !== 'running') { multiBatchResumeStarted = false; renderMultiBatchStatus(); return; }
     try {
       if (session.pointIndex >= session.points.length) {
+        await completeMultiProjectSession(session, () => persistMultiBatchSession(null), removeMultiBatchDirectory);
         setStatus(`跨工程批量导出完成 · 共保存 ${session.completedFiles} 个文件`, 'ready', true);
-        saveMultiBatchSession(null); renderMultiBatchStatus(); multiBatchResumeStarted = false; return;
+        renderMultiBatchStatus(); multiBatchResumeStarted = false; return;
       }
       const point = session.points[session.pointIndex];
       const url = validProjectUrl(point.url, point.projectId);
@@ -262,9 +387,17 @@ export function startApp(version) {
       const directory = await storeMultiBatchDirectory(session.id);
       if (!directory) throw new Error('目标文件夹句柄已丢失，请重新授权');
       if (directory.queryPermission && await directory.queryPermission({ mode: 'readwrite' }) !== 'granted') throw new Error('目标文件夹授权已失效，请点击继续');
-      const { canvas, binding, view } = await waitForProjectView(point);
+      const { canvas, binding, view } = await waitForProjectView(point, session.id);
       settings = normalizeSettings(session.settings); saveSettings(); syncUI();
-      const jobs = planMultiProjectJobs(EXPORT_ITEMS, session.itemKeys, session.includeWireframe);
+      const live = loadMultiBatchSession();
+      if (!live || live.id !== session.id || live.status !== 'running') throw new Error('跨工程批量任务已取消');
+      session = live;
+      if (!session.activeJobs) {
+        session.activeJobs = planMultiProjectJobs(EXPORT_ITEMS, session.itemKeys, session.includeWireframe && wireframeAvailable());
+        session.jobIndex = 0;
+        persistMultiBatchSession(session);
+      }
+      const jobs = session.activeJobs;
       const originalMaterial = currentMaterial();
       const originalWireframe = toggleIsOn(findWireframeButton());
       const batchState = { view, signatures: new Map(), plans: { uniform: makeFramePlan('uniform', settings), transition: makeFramePlan('transition', settings) } };
@@ -275,31 +408,59 @@ export function startApp(version) {
           const item = EXPORT_ITEMS.find(candidate => candidate.key === job.key);
           if (!item) throw new Error('批量文件配置无效');
           setStatus(`工程 ${session.pointIndex + 1}/${session.points.length} · 文件 ${session.jobIndex + 1}/${jobs.length} · ${item.material.label}${job.wireframe ? '线框' : ''}`, 'running');
+          const beforeJob = loadMultiBatchSession();
+          if (!beforeJob || beforeJob.id !== session.id || beforeJob.status !== 'running') throw new Error('跨工程批量任务已取消');
           await switchMaterial(item.material); await switchWireframe(job.wireframe);
           const filename = formatOutputFilename(item.kind, point.projectName || `工程-${point.projectId.slice(0, 8)}`, item.material.label, settings, job.wireframe);
           const options = { forceRecord: true, outputFilename: filename, outputTarget: { kind: 'directory', handle: directory }, suppressAutoShow: true, restoreAfter: true, batchState };
           const saved = item.kind === 'screenshot' ? await takeScreenshot(options) : await startRotation(item.kind, options);
           if (!saved) throw new Error(`${filename} 导出失败`);
-          session.jobIndex += 1; session.completedFiles += 1; saveMultiBatchSession(session);
+          const afterJob = loadMultiBatchSession();
+          if (!afterJob || afterJob.id !== session.id || afterJob.status !== 'running') throw new Error('跨工程批量任务已取消');
+          session = afterJob;
+          session.jobIndex += 1; session.completedFiles += 1; persistMultiBatchSession(session);
         }
       } finally {
         await switchMaterial(originalMaterial, true).catch(() => {}); await switchWireframe(originalWireframe, true).catch(() => {});
         try { applyView(binding, view); binding.manager.invalidate(); } catch {}
         batchRunning = false; showPanel(true);
       }
-      session.pointIndex += 1; session.jobIndex = 0; saveMultiBatchSession(session);
+      const afterProject = loadMultiBatchSession();
+      if (!afterProject || afterProject.id !== session.id || afterProject.status !== 'running') throw new Error('跨工程批量任务已取消');
+      session = afterProject;
+      session.pointIndex += 1; session.jobIndex = 0; session.activeJobs = null; persistMultiBatchSession(session);
+      if (session.pointIndex >= session.points.length) {
+        await completeMultiProjectSession(session, () => persistMultiBatchSession(null), removeMultiBatchDirectory);
+        setStatus(`跨工程批量导出完成 · 共保存 ${session.completedFiles} 个文件`, 'ready', true);
+        multiBatchResumeStarted = false; renderMultiBatchStatus(); return;
+      }
       multiBatchResumeStarted = false; renderMultiBatchStatus(); void continueMultiProjectBatch();
     } catch (error) {
-      session = loadMultiBatchSession();
-      if (session) { session.status = 'paused'; session.error = error.message; saveMultiBatchSession(session); }
+      try { session = loadMultiBatchSession(); }
+      catch { session = null; }
+      if (!session) {
+        batchRunning = false; multiBatchResumeStarted = false; renderMultiBatchStatus();
+        return;
+      }
+      if (session && session.status !== 'cancelled') { session.status = 'paused'; session.error = error.message; saveMultiBatchSession(session); }
       batchRunning = false; multiBatchResumeStarted = false; setStatus(`跨工程批量导出已暂停：${error.message}`, 'error'); renderMultiBatchStatus();
     }
   }
 
-  function cancelMultiProjectBatch() {
-    const session = loadMultiBatchSession();
+  async function cancelMultiProjectBatch() {
+    let session: MultiProjectBatchSession | null;
+    try { session = loadMultiBatchSession(); }
+    catch (error) { setStatus(error.message, 'error'); renderMultiBatchStatus(); return; }
     if (!session) return;
-    session.status = 'cancelled'; saveMultiBatchSession(session); setStatus('已取消跨工程批量导出；已完成文件保留', 'warning', true); renderMultiBatchStatus();
+    try {
+      await cancelMultiProjectSession(session,
+        cancelled => { saveMultiBatchSession(cancelled); },
+        () => { if (activeRun) stopRotation('跨工程批量导出已取消'); },
+        () => saveMultiBatchSession(null),
+        removeMultiBatchDirectory);
+      setStatus('已取消跨工程批量导出；已完成文件保留', 'warning', true);
+    } catch (error) { console.error('[Tripo Rotation] 清理已取消批量任务失败', error); setStatus(`已取消任务，但文件夹句柄清理失败：${error.message}`, 'error'); }
+    renderMultiBatchStatus();
   }
 
   // 录制只接受真实 Tres 上下文。没有入口时禁止回退到模拟鼠标。
@@ -2623,6 +2784,7 @@ export function startApp(version) {
         </div>
         <details id="restorePointsDetails">
           <summary>导出还原点 <span class="hint" id="restorePointCount">0 个还原点</span></summary>
+          <button id="recordRestorePoint" type="button">记录当前导出点</button>
           <div id="restorePointList"></div>
           <p class="note">每次导出会保存当前视角、相机尺寸和导出设置，可用于跨工程批处理或补导。</p>
         </details>
@@ -2832,7 +2994,8 @@ export function startApp(version) {
   $('#screenshot').addEventListener('click', () => void runExportAction(handleScreenshotClick));
   $('#exportAll').addEventListener('click', () => void runExportAction(exportAll));
   ui.multiBatchStart.addEventListener('click', () => void runExportAction(startMultiProjectBatch));
-  ui.multiBatchCancel.addEventListener('click', cancelMultiProjectBatch);
+  ui.multiBatchCancel.addEventListener('click', () => void cancelMultiProjectBatch());
+  $('#recordRestorePoint').addEventListener('click', recordManualRestorePoint);
   $('#stop').addEventListener('click', () => stopRotation());
   $('#hide').addEventListener('click', () => showPanel(false, true));
   $('#checkFrameEntry').addEventListener('click', () => void runExportAction(checkFrameEntry));

@@ -82,6 +82,8 @@ export interface MultiProjectBatchSession {
   settings: Settings;
   pointIndex: number;
   jobIndex: number;
+  /** Frozen job list for the current project, retained across reloads. */
+  activeJobs?: Array<{ key: ExportKey; wireframe: boolean }> | null;
   completedFiles: number;
   error: string;
 }
