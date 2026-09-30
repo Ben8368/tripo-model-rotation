@@ -10,7 +10,8 @@ const harnessSource = source.replace("import type { Settings } from './types/set
 const names = ['runExportAction','animateDrag','stopRotation','throwIfCancelled','nextRenderedFrame','sleep',
   'exportAll','takeScreenshot','startRotation','hideAxisOverlay','createCanvasFrameSource','createFrameLock',
   'switchMaterial','switchWireframe','waitForTabFrame','createTabCapture','handleScreenshotClick',
-  'saveBlob','resumePendingSave','discardPendingSave','handleBeforeUnload','snapshotView','applyView'];
+  'saveBlob','resumePendingSave','discardPendingSave','handleBeforeUnload','snapshotView','applyView',
+  'isSolidSurfaceMaterial','patchSolidFragment','applyWireframeStyle'];
 const overrides = ['setStatus','sanitizeSettingsFromUI','requestProjectName','plannedExportItems',
   'currentMaterial','toggleIsOn','findWireframeButton','findViewerCanvas','snapshotView','findRenderContext',
   'showPanel','switchMaterial','switchWireframe','buildOutputFilename','takeScreenshot','applyView',
@@ -155,6 +156,30 @@ for (const [variant, code] of [['unminified',plain],['minified',compiled]]) {
     });
     assert.equal(ran,false);assert.equal(api.busy,false);
   });
+  test(`${variant}: pale linear white and custom shaders remain eligible for solid brightening`,()=>{
+    const {api}=setup(code);
+    const pale={isMeshPhysicalMaterial:true,color:{r:0.6,g:0.6,b:0.6},clone(){}};
+    assert.equal(api.isSolidSurfaceMaterial(pale),true);
+    assert.equal(api.isSolidSurfaceMaterial({...pale,userData:{wireframe:true}}),false);
+    assert.equal(api.isSolidSurfaceMaterial({...pale,color:{r:1,g:0.2,b:0.2}}),false);
+    const shader='void main() { gl_FragColor = vec4(1.0); #include <dithering_fragment> }';
+    assert.match(api.patchSolidFragment(shader,'0.8'),/tripoSolidBase/);
+    assert.equal(api.patchSolidFragment('void main() {}','0.8'),'');
+  });
+  test(`${variant}: wireframe controls update shader uniforms before export`,()=>{
+    const {api}=setup(code);let invalidations=0,color='#000000';
+    const uniforms={linewidth:{value:1},wireframeColor:{value:{getHexString:()=>color.slice(1),set:value=>{color=value;}}},
+      wireframeOpacity:{value:0.7},minAlpha:{value:0.1}};
+    const binding={scene:{traverse:visit=>visit({material:{userData:{wireframe:true},uniforms}})},
+      manager:{invalidate(){invalidations++;}}};
+    api.override({findViewerCanvas:()=>({}),findRenderContext:()=>binding});
+    api.config.wireframeWidth=2;api.config.wireframeColor='#123456';api.config.wireframeOpacity=0.05;
+    assert.equal(api.applyWireframeStyle(true),1);
+    assert.equal(uniforms.linewidth.value,2);assert.equal(color,'#123456');
+    assert.equal(uniforms.wireframeOpacity.value,0.05);assert.equal(uniforms.minAlpha.value,0.05);
+    assert.equal(invalidations,1);
+    assert.equal(api.applyWireframeStyle(true),1);assert.equal(invalidations,1);
+  });
   test(`${variant}: DOM axis visibility restored without erasing output pixels`,()=>{
     const {api,context}=setup(code);const style=new Map([['visibility',['visible','important']]]);
     api.override({findAxisOverlay:()=>({style:{
@@ -180,6 +205,8 @@ for (const [variant, code] of [['unminified',plain],['minified',compiled]]) {
       createCanvasFrameSource:()=>({cleanup(){}}),saveBlob:async()=>{saves++;},showPanel(){},
     });
     const action=api.runExportAction(()=>api.takeScreenshot({outputFilename:'x.png'}));
+    for(let attempt=0;attempt<20 && !rejectCapture;attempt++) await Promise.resolve();
+    assert.equal(typeof rejectCapture,'function');
     api.stopRotation();await bounded(action);
     assert(releaseCount>=1);assert.equal(saves,0);assert.equal(api.busy,false);
   });

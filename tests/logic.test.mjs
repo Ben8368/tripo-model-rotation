@@ -58,6 +58,11 @@ for (const minify of [false, true]) {
     assert.equal(settings.autoHide, true);
     assert.equal(settings.transparentOutput, true);
     assert.equal(settings.recordingScope, 'canvas');
+    const wireframe = api.normalizeSettings({ wireframeWidth: 99, wireframeColor: '#Ab12Cd', wireframeOpacity: -1 });
+    assert.equal(wireframe.wireframeWidth, 8);
+    assert.equal(wireframe.wireframeColor, '#ab12cd');
+    assert.equal(wireframe.wireframeOpacity, 0);
+    assert.equal(api.normalizeSettings({ wireframeColor: 'red' }).wireframeColor, '#000000');
     settings.batchItems.length = 0;
     assert.equal(defaults.batchItems.length, 9);
     assert.equal(api.DEFAULT_SETTINGS.batchItems.length, 9);

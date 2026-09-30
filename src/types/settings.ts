@@ -37,6 +37,9 @@ export interface Settings {
   transparentOutput: boolean;
   batchItems: ExportKey[];
   batchWireframeVariants: boolean;
+  wireframeWidth: number;
+  wireframeColor: string;
+  wireframeOpacity: number;
   studioLighting: boolean;
   lightingEnvironment: number;
   lightingDirect: number;
@@ -62,6 +65,7 @@ export interface ExportRestorePoint {
   itemCount?: number;
   cameraType?: string;
   canvasCssSize?: readonly [number, number];
+  slider?: { mode: 'dolly' | 'zoom'; baseline: number; percent: number; metric: number } | null;
   view: Record<string, unknown>;
   settings: Partial<Settings>;
 }

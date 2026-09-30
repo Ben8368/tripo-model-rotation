@@ -46,6 +46,9 @@ export function startApp(version) {
   let statusIsSticky = false;
   let lightingSnapshot = null;
   let solidLookSnapshot = null;
+  let zoomState = null;
+  let zoomDragging = false;
+  let wireframeStyleState = null;
   let ui = null;
   let multiBatchResumeStarted = false;
   let multiBatchNavigating = false;
@@ -95,12 +98,19 @@ export function startApp(version) {
       if (!canvas) throw new Error('无法记录还原点：模型画面尚未加载');
       const binding = findRenderContext(canvas);
       const view = snapshotView(binding);
+      bindZoomSlider();
+      const metric = zoomState?.canvas === canvas ? zoomMetric(zoomState) : null;
+      const slider = Number.isFinite(metric) && metric > 0 ? {
+        mode: zoomState.mode, baseline: zoomState.baseline,
+        percent: (zoomState.mode === 'dolly' ? zoomState.baseline / metric : metric / zoomState.baseline) * 100,
+        metric,
+      } : null;
       const point: ExportRestorePoint = {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
         projectId: currentProjectId(), url: validProjectUrl(location.href, currentProjectId()) || location.href,
         projectName: getProjectName(), createdAt: new Date().toISOString(), kind, itemCount,
         cameraType: binding.camera.type, canvasCssSize: [canvas.getBoundingClientRect().width, canvas.getBoundingClientRect().height],
-        view: view as unknown as Record<string, unknown>, settings: structuredClone(settings),
+        view: view as unknown as Record<string, unknown>, slider, settings: structuredClone(settings),
       };
       const store = loadRestorePointsForWrite();
       store[point.projectId] = [point, ...(store[point.projectId] || [])].slice(0, 20);
@@ -174,7 +184,14 @@ export function startApp(version) {
       settings = restored;
       settingsWritten = true;
       if (!saveSettings()) throw new Error('设置无法保存');
-      syncUI(); syncBatchSelection(); applyLightingPreset(); applySolidLook(); binding.manager.invalidate();
+      syncUI(); syncBatchSelection(); applyLightingPreset(); applySolidLook(); bindWireframeStyle();
+      bindZoomSlider();
+      if (zoomState?.canvas === canvas && point.slider?.mode === zoomState.mode &&
+          Number.isFinite(point.slider.baseline) && point.slider.baseline > 0) {
+        zoomState.baseline = point.slider.baseline;
+        syncZoomSlider();
+      }
+      binding.manager.invalidate();
       setStatus('已精确还原导出视角与设置', 'ready', true);
       return true;
     } catch (error) {
@@ -194,7 +211,7 @@ export function startApp(version) {
               else localStorage.setItem(STORAGE_KEY, previousStoredSettings);
             } catch (rollbackError) { console.error('[Tripo Rotation] 还原失败且本地设置回滚失败', rollbackError); }
           }
-          try { syncUI(); syncBatchSelection(); applyLightingPreset(); applySolidLook(); }
+          try { syncUI(); syncBatchSelection(); applyLightingPreset(); applySolidLook(); bindWireframeStyle(); syncZoomSlider(); }
           catch (rollbackError) { console.error('[Tripo Rotation] 还原失败且界面/画面回滚失败', rollbackError); }
         }, rollbackError => console.error('[Tripo Rotation] 还原失败且回滚失败', rollbackError));
       } catch (originalError) { setStatus(`还原失败：${originalError.message}`, 'error'); return false; }
@@ -529,14 +546,63 @@ export function startApp(version) {
     return true;
   }
 
-  // 白膜常用 Matcap；原站 HDRI 强度对它可能无效。只对当前白膜模型的
-  // 内建受光材质做屏幕空间的中间调提亮，黑位与白位保持不变；线框材质不参与。
+  function linearToSrgb(value) {
+    if (!Number.isFinite(value) || value <= 0) return 0;
+    return value <= 0.0031308 ? value * 12.92 : 1.055 * Math.pow(value, 1 / 2.4) - 0.055;
+  }
+
+  function solidColorAcceptable(material) {
+    const color = material.color;
+    if (!color || ![color.r, color.g, color.b].every(Number.isFinite)) return true;
+    const { r, g, b } = color;
+    if (Math.max(r, g, b) - Math.min(r, g, b) > 0.34) return false;
+    const darkest = Math.min(r, g, b);
+    return Math.max(darkest, linearToSrgb(darkest)) >= 0.28;
+  }
+
+  // Three's managed colors may store a pale white surface below 0.65 in linear space.
   function isSolidSurfaceMaterial(material) {
-    if (!material || material.wireframe || !material.color || typeof material.clone !== 'function') return false;
-    if (!(material.isMeshMatcapMaterial || material.isMeshStandardMaterial ||
-          material.isMeshPhongMaterial || material.isMeshLambertMaterial)) return false;
-    const { r, g, b } = material.color;
-    return Math.min(r, g, b) >= 0.65 && Math.max(r, g, b) - Math.min(r, g, b) < 0.15;
+    if (!material || material.wireframe || typeof material.clone !== 'function') return false;
+    if (material.userData?.wireframe || material.uniforms?.wireframeColor ||
+        material.isLineBasicMaterial || material.isPointsMaterial || material.isSpriteMaterial) return false;
+    const known = material.isMeshMatcapMaterial || material.isMeshStandardMaterial ||
+      material.isMeshPhysicalMaterial || material.isMeshPhongMaterial ||
+      material.isMeshLambertMaterial || material.isMeshToonMaterial || material.isNodeMaterial;
+    const custom = material.isShaderMaterial || material.isRawShaderMaterial;
+    return Boolean((known || custom) && solidColorAcceptable(material));
+  }
+
+  function patchSolidFragment(fragmentShader, strength) {
+    if (!fragmentShader || fragmentShader.includes('tripoSolidBase')) return '';
+    const lift = target => `vec3 tripoSolidBase = clamp(${target}.rgb, 0.0, 1.0);\n` +
+      `${target}.rgb = clamp(tripoSolidBase + ${strength} * tripoSolidBase * (1.0 - tripoSolidBase), 0.0, 1.0);\n`;
+    for (const anchor of ['#include <dithering_fragment>', '#include <colorspace_fragment>',
+      '#include <encodings_fragment>', '#include <tonemapping_fragment>']) {
+      if (fragmentShader.includes(anchor)) return fragmentShader.replace(anchor, `${lift('gl_FragColor')}${anchor}`);
+    }
+    const output = ['gl_FragColor', 'pc_fragColor', 'fragColor', 'outColor']
+      .find(name => new RegExp(`\\b${name}\\b`).test(fragmentShader));
+    const close = fragmentShader.lastIndexOf('}');
+    return output && close >= 0
+      ? `${fragmentShader.slice(0, close)}${lift(output)}${fragmentShader.slice(close)}` : '';
+  }
+
+  async function applySolidLookWhenReady(timeoutMs = 6000, restoring = false) {
+    if (!settings.brightSolid || currentMaterial().id !== 'solid') {
+      try { return applySolidLook(); }
+      catch (error) { console.warn('[Tripo Rotation] 还原白膜提亮失败', error); return false; }
+    }
+    const deadline = Date.now() + timeoutMs;
+    let lastError = null;
+    do {
+      if (!restoring) throwIfCancelled();
+      try { if (applySolidLook()) return true; lastError = null; }
+      catch (error) { lastError = error; }
+      await sleep(120, restoring ? null : activeTask);
+    } while (Date.now() < deadline);
+    console.warn('[Tripo Rotation] 等待白膜材质就位超时，已保留原站画面继续导出', lastError);
+    setStatus('白膜提亮未生效，已保留原站画面继续导出', 'warning');
+    return false;
   }
 
   function restoreSolidLook() {
@@ -597,16 +663,15 @@ export function startApp(version) {
         const adjust = material => {
           if (!isSolidSurfaceMaterial(material)) return material;
           if (adjustedByOriginal.has(material)) return adjustedByOriginal.get(material);
+          if ((material.isShaderMaterial || material.isRawShaderMaterial) &&
+              !patchSolidFragment(String(material.fragmentShader || ''), strength)) return material;
           const clone = material.clone();
           const originalCompile = material.onBeforeCompile;
           const originalProgramKey = material.customProgramCacheKey?.() || '';
           clone.onBeforeCompile = function (shader, renderer) {
             originalCompile?.call(this, shader, renderer);
-            const anchor = '#include <dithering_fragment>';
-            if (!shader.fragmentShader.includes(anchor)) return;
-            shader.fragmentShader = shader.fragmentShader.replace(anchor,
-              `vec3 tripoSolidBase = clamp(gl_FragColor.rgb, 0.0, 1.0);\n` +
-              `gl_FragColor.rgb = clamp(tripoSolidBase + ${strength} * tripoSolidBase * (1.0 - tripoSolidBase), 0.0, 1.0);\n${anchor}`);
+            const patched = patchSolidFragment(shader.fragmentShader, strength);
+            if (patched) shader.fragmentShader = patched;
           };
           clone.customProgramCacheKey = () => `${originalProgramKey}:tripo-bright-solid:${strength}`;
           clone.needsUpdate = true;
@@ -622,7 +687,7 @@ export function startApp(version) {
       });
       if (!assignments.length) {
         for (const material of clones as unknown as any[]) material.dispose?.();
-        if (strict) throw new Error('未找到可调整的白膜材质；已保留原站画面');
+        if (strict) setStatus('白膜提亮未生效，已保留原站画面继续导出', 'warning');
         return false;
       }
       solidLookSnapshot = { scene, manager, lift, assignments, clones };
@@ -688,6 +753,95 @@ export function startApp(version) {
       throw new Error('相机角度受到页面限制，不能保证精确圈数');
     }
     return cameraSignature(camera);
+  }
+
+  // The current camera position is the 100% baseline for this page only.
+  function zoomMetric(state) {
+    return state.mode === 'dolly' ? state.controls.distance : state.camera.zoom;
+  }
+
+  function zoomLocked() {
+    return Boolean(exportBusy || batchRunning || activeRun || pendingSave ||
+      pendingProjectName || pendingBatchStart);
+  }
+
+  function syncZoomSlider() {
+    if (!ui?.zoomRail) return;
+    const state = zoomState;
+    const metric = state && zoomMetric(state);
+    if (!state || !state.canvas.isConnected || !Number.isFinite(metric) || metric <= 0) {
+      for (const control of [ui.zoomRange, ui.zoomValue, ui.zoomIn, ui.zoomOut]) control.disabled = true;
+      ui.zoomValue.value = '';
+      return;
+    }
+    let ratio = state.mode === 'dolly' ? state.baseline / metric : metric / state.baseline;
+    if (!Number.isFinite(ratio) || ratio < 0.25 || ratio > 4) {
+      state.baseline = metric;
+      ratio = 1;
+    }
+    const value = String(Math.round(ratio * 1000) / 10);
+    if (!zoomDragging) ui.zoomRange.value = value;
+    if (shadow.activeElement !== ui.zoomValue) ui.zoomValue.value = value;
+    for (const control of [ui.zoomRange, ui.zoomValue, ui.zoomIn, ui.zoomOut]) control.disabled = zoomLocked();
+  }
+
+  function bindZoomSlider() {
+    if (!ui?.zoomRail) return;
+    const canvas = findViewerCanvas();
+    let binding = null;
+    try { if (canvas) binding = findRenderContext(canvas); } catch { /* viewer not ready */ }
+    const mode = binding?.camera?.isOrthographicCamera ? 'zoom'
+      : binding?.camera?.isPerspectiveCamera ? 'dolly' : null;
+    const supported = mode === 'zoom' ? typeof binding.controls?.zoomTo === 'function'
+      : mode === 'dolly' ? typeof binding.controls?.dollyTo === 'function' : false;
+    if (!supported) {
+      zoomState?.renderHook?.off?.();
+      zoomState = null;
+      syncZoomSlider();
+      return;
+    }
+    if (zoomState?.canvas !== canvas || zoomState?.controls !== binding.controls ||
+        zoomState?.camera !== binding.camera || zoomState?.scene !== binding.scene) {
+      zoomState?.renderHook?.off?.();
+      const next: any = { ...binding, mode, baseline: 0, renderHook: null };
+      next.baseline = zoomMetric(next);
+      if (!Number.isFinite(next.baseline) || next.baseline <= 0) {
+        zoomState = null;
+        syncZoomSlider();
+        return;
+      }
+      zoomState = next;
+      next.renderHook = binding.manager.onRender(() => {
+        if (zoomState === next && panelVisible && !zoomLocked()) syncZoomSlider();
+      });
+    }
+    syncZoomSlider();
+  }
+
+  function setFineZoom(percent) {
+    if (zoomLocked()) { syncZoomSlider(); return false; }
+    const state = zoomState;
+    if (!state || !state.canvas.isConnected || findViewerCanvas() !== state.canvas) {
+      bindZoomSlider();
+      return false;
+    }
+    const ratio = Math.min(4, Math.max(0.25, Number(percent) / 100));
+    if (!Number.isFinite(ratio)) return false;
+    const target = state.mode === 'dolly' ? state.baseline / ratio : state.baseline * ratio;
+    if (state.mode === 'dolly') state.controls.dollyTo(target, false);
+    else state.controls.zoomTo(target, false);
+    state.controls.update(0);
+    state.camera.updateMatrixWorld(true);
+    state.manager.invalidate();
+    syncZoomSlider();
+    return true;
+  }
+
+  function stepFineZoom(delta) {
+    if (zoomLocked()) return;
+    const next = Math.min(400, Math.max(25, Math.round((Number(ui.zoomRange.value) + delta) * 10) / 10));
+    ui.zoomRange.value = String(next);
+    setFineZoom(next);
   }
 
   function createFrameLock(canvas, initialView = null) {
@@ -1034,6 +1188,73 @@ export function startApp(version) {
   function wireframeAvailable() {
     const button = findWireframeButton();
     return Boolean(button && button.isConnected && !button.disabled);
+  }
+
+  function applyWireframeStyle(strict = false, suppliedBinding = null) {
+    const canvas = suppliedBinding?.canvas || findViewerCanvas();
+    if (!canvas) {
+      if (strict) throw new Error('模型尚未加载，无法应用线框样式');
+      return 0;
+    }
+    let binding = suppliedBinding;
+    try { binding ||= findRenderContext(canvas); }
+    catch (error) { if (strict) throw error; return 0; }
+    if (typeof binding.scene?.traverse !== 'function') {
+      if (strict) throw new Error('当前查看器不支持线框样式调整');
+      return 0;
+    }
+    const color = settings.wireframeColor;
+    const width = settings.wireframeWidth;
+    const opacity = settings.wireframeOpacity;
+    let found = 0;
+    let changed = false;
+    binding.scene.traverse(object => {
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      for (const material of materials) {
+        const uniforms = material?.uniforms;
+        if (!material?.userData?.wireframe || !uniforms?.linewidth ||
+            !uniforms.wireframeColor || !uniforms.wireframeOpacity) continue;
+        found += 1;
+        if (uniforms.linewidth.value !== width) { uniforms.linewidth.value = width; changed = true; }
+        if (uniforms.wireframeColor.value?.getHexString?.()?.toLowerCase() !== color.slice(1)) {
+          uniforms.wireframeColor.value?.set?.(color);
+          changed = true;
+        }
+        if (uniforms.wireframeOpacity.value !== opacity) {
+          uniforms.wireframeOpacity.value = opacity;
+          changed = true;
+        }
+        if (uniforms.minAlpha && uniforms.minAlpha.value !== Math.min(0.1, opacity)) {
+          uniforms.minAlpha.value = Math.min(0.1, opacity);
+          changed = true;
+        }
+      }
+    });
+    if (changed) binding.manager.invalidate();
+    if (strict && !found) throw new Error('线框尚未完成加载，无法保证导出样式一致');
+    return found;
+  }
+
+  function bindWireframeStyle() {
+    const canvas = findViewerCanvas();
+    let binding = null;
+    try { if (canvas) binding = findRenderContext(canvas); } catch { /* viewer not ready */ }
+    if (!binding || typeof binding.scene?.traverse !== 'function' ||
+        typeof binding.manager?.onRender !== 'function') {
+      wireframeStyleState?.renderHook?.off?.();
+      wireframeStyleState = null;
+      return;
+    }
+    if (wireframeStyleState?.canvas !== canvas || wireframeStyleState?.scene !== binding.scene ||
+        wireframeStyleState?.manager !== binding.manager) {
+      wireframeStyleState?.renderHook?.off?.();
+      const next: any = { ...binding, renderHook: null };
+      wireframeStyleState = next;
+      next.renderHook = binding.manager.onRender(() => {
+        if (wireframeStyleState === next) applyWireframeStyle(false, next);
+      });
+    }
+    applyWireframeStyle(false, wireframeStyleState);
   }
 
   function plannedExportItems() {
@@ -1887,6 +2108,10 @@ export function startApp(version) {
     settings.videoBitrateMbps = clamp(ui.videoBitrate.value, 0, 200, 0);
     settings.showAxisInOutput = ui.showAxisInOutput.checked;
     settings.transparentOutput = ui.transparentOutput.checked;
+    settings.wireframeWidth = clamp(ui.wireframeWidth.value, 0.25, 8, 1);
+    settings.wireframeColor = /^#[0-9a-f]{6}$/i.test(ui.wireframeColor.value)
+      ? ui.wireframeColor.value.toLowerCase() : DEFAULTS.wireframeColor;
+    settings.wireframeOpacity = clamp(ui.wireframeOpacity.value, 0, 100, 70) / 100;
     settings.studioLighting = ui.studioLighting.checked;
     settings.lightingEnvironment = clamp(ui.lightingEnvironment.value, 0, 3, 1.4);
     settings.lightingDirect = clamp(ui.lightingDirect.value, 0, 3, 1.2);
@@ -1897,6 +2122,7 @@ export function startApp(version) {
     syncUI();
     applyLightingPreset();
     applySolidLook();
+    bindWireframeStyle();
   }
 
   function syncUI() {
@@ -1917,6 +2143,9 @@ export function startApp(version) {
     ui.videoBitrate.value = String(settings.videoBitrateMbps);
     ui.showAxisInOutput.checked = settings.showAxisInOutput;
     ui.transparentOutput.checked = settings.transparentOutput;
+    ui.wireframeWidth.value = String(settings.wireframeWidth);
+    ui.wireframeColor.value = settings.wireframeColor;
+    ui.wireframeOpacity.value = String(Math.round(settings.wireframeOpacity * 1000) / 10);
     ui.studioLighting.checked = settings.studioLighting;
     ui.lightingEnvironment.value = String(settings.lightingEnvironment);
     ui.lightingDirect.value = String(settings.lightingDirect);
@@ -1953,8 +2182,9 @@ export function startApp(version) {
       if (settings.transparentOutput && settings.recordingScope === 'tab') {
         throw new Error('透明导出仅支持“仅模型”范围，标签页录屏不保留 Alpha');
       }
+      await applySolidLookWhenReady();
+      throwIfCancelled();
       if (settings.recordingScope === 'tab') {
-        applySolidLook(true);
         showPanel(false);
         restoreAxis = hideAxisOverlay(canvas);
         await nextRenderedFrame();
@@ -1966,7 +2196,6 @@ export function startApp(version) {
         await source.waitForFrame();
         source.drawFrame();
       } else {
-        applySolidLook(true);
         frameLock = createFrameLock(canvas, options.batchState?.view);
         activeTask?.cleanups.add(frameLock.release);
         source = createCanvasFrameSource(canvas, false);
@@ -2061,16 +2290,27 @@ export function startApp(version) {
     return findButtonWithIcon(material.icon);
   }
 
+  async function waitForMaterialButton(material, restoring = false, timeoutMs = 30_000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (!restoring) throwIfCancelled();
+      const button = findMaterialButton(material.id);
+      if (button?.isConnected && !button.disabled) return button;
+      await sleep(100, restoring ? null : activeTask);
+    }
+    throw new Error(`等待“${material.label}”显示按钮加载超时`);
+  }
+
   async function switchMaterial(material, restoring = false) {
     if (!restoring) throwIfCancelled();
-    const button = findMaterialButton(material.id);
-    if (!button) throw new Error(`没有找到“${material.label}”显示按钮`);
+    let button = await waitForMaterialButton(material, restoring);
     if (material.id !== 'solid') restoreSolidLook();
     if (button.getAttribute('aria-pressed') !== 'true' && button.dataset.state !== 'on') {
       button.click();
       for (let attempt = 0; attempt < 50; attempt += 1) {
         await sleep(100, restoring ? null : activeTask);
         if (!restoring) throwIfCancelled();
+        button = findMaterialButton(material.id) || button;
         if (button.getAttribute('aria-pressed') === 'true' || button.dataset.state === 'on') break;
         if (attempt === 49) throw new Error(`切换到“${material.label}”超时`);
       }
@@ -2079,7 +2319,9 @@ export function startApp(version) {
     if (!restoring) await nextRenderedFrame();
     await sleep(250, restoring ? null : activeTask);
     if (!restoring) throwIfCancelled();
-    applySolidLook(true);
+    await applySolidLookWhenReady(6000, restoring);
+    if (!restoring) throwIfCancelled();
+    if (toggleIsOn(findWireframeButton())) applyWireframeStyle(true);
   }
 
   async function switchWireframe(enabled, restoring = false) {
@@ -2102,6 +2344,14 @@ export function startApp(version) {
     if (!restoring) await nextRenderedFrame();
     await sleep(250, restoring ? null : activeTask);
     if (!restoring) throwIfCancelled();
+    if (enabled) {
+      for (let attempt = 0; attempt < 50; attempt += 1) {
+        if (!restoring) throwIfCancelled();
+        if (applyWireframeStyle(false) > 0) { if (!restoring) await nextRenderedFrame(); return; }
+        await sleep(100, restoring ? null : activeTask);
+      }
+      applyWireframeStyle(true);
+    }
   }
 
   async function runExportAction(action) {
@@ -2294,6 +2544,8 @@ export function startApp(version) {
   function refreshCanvasStatus() {
     syncProjectNameField();
     if (ui.exportAll && ui.batchMenu) syncBatchSelection();
+    bindZoomSlider();
+    bindWireframeStyle();
     if (activeRun || batchRunning || exportBusy || pendingSave) return;
     if (settings.studioLighting) applyLightingPreset();
     const solidApplied = applySolidLook();
@@ -2320,6 +2572,8 @@ export function startApp(version) {
     if (manual) visibilityRevision += 1;
     panelVisible = visible;
     ui.panel.hidden = !visible;
+    ui.zoomRail.hidden = !visible;
+    if (visible) bindZoomSlider();
     const launcher = document.getElementById(`${SCRIPT_ID}-launcher`);
     if (launcher) {
       launcher.setAttribute('aria-expanded', String(visible));
@@ -2452,7 +2706,6 @@ export function startApp(version) {
 
   async function startStrictRotation(mode, canvas, options) {
     requireCanvasRecording();
-    applySolidLook(true);
     const config = { ...settings };
     const plan = options.batchState?.plans[mode] || makeFramePlan(mode, config);
     const run = { mode, canvas, strictFrames: true, cancelled: false,
@@ -2593,7 +2846,8 @@ export function startApp(version) {
       return;
     }
 
-    applySolidLook(true);
+    await applySolidLookWhenReady();
+    throwIfCancelled();
 
     if (settings.recordEnabled || options.forceRecord) {
       return startStrictRotation(mode, canvas, options);
@@ -2721,6 +2975,12 @@ export function startApp(version) {
       * { box-sizing: border-box; }
       .panel { width: 330px; color: #f7f7f8; background: rgba(20,21,25,.94); border: 1px solid rgba(255,255,255,.12); border-radius: 14px; box-shadow: 0 16px 45px rgba(0,0,0,.38); backdrop-filter: blur(16px); overflow: hidden; pointer-events: auto; }
       .panel[hidden] { display: none; }
+      .zoom-rail { position:absolute; left:-68px; top:50%; transform:translateY(-50%); width:62px; height:min(460px, calc(100vh - 36px)); display:flex; flex-direction:column; align-items:center; gap:6px; padding:10px 5px; border:1px solid rgba(255,255,255,.12); border-radius:12px; background:rgba(20,21,25,.94); box-shadow:0 10px 28px rgba(0,0,0,.3); color:#f7f7f8; pointer-events:auto; }
+      .zoom-rail label { font-size:10px; color:#c8c9d0; }
+      .zoom-rail input[type="range"] { appearance:auto; writing-mode:vertical-lr; direction:rtl; flex:1; width:24px; min-width:24px; min-height:0; margin:0; padding:0; border:0; background:transparent; accent-color:#846bff; cursor:pointer; touch-action:none; }
+      .zoom-rail .zoom-step { width:28px; height:25px; padding:0; background:#393341; font-size:17px; line-height:1; }
+      .zoom-number { display:flex; align-items:center; gap:1px; color:#c8bfff; font-size:10px; }
+      .zoom-number input { width:42px; min-width:42px; padding:3px 2px; text-align:center; color:#c8bfff; font-size:10px; }
       header { display:flex; align-items:center; justify-content:space-between; padding:12px 13px 10px; border-bottom:1px solid rgba(255,255,255,.08); }
       h2 { margin:0; font-size:14px; font-weight:700; letter-spacing:.2px; }
       .hint { color:#8d9099; font-size:10px; }
@@ -2846,6 +3106,18 @@ export function startApp(version) {
           <p class="note">视频会逐帧记录模型画面，旋转角度更准确。导出时可以切换标签页，但请勿刷新或关闭 Tripo；如果浏览器暂停绘制，回来后会继续。批量导出不同材质时会使用相同起始视角。“整个当前标签页”目前只支持截图；视频请选择“仅模型画面”。</p>
         </details>
         <details>
+          <summary>线框样式</summary>
+          <div class="grid">
+            <label for="wireframeWidth">线条粗细（px）</label>
+            <input id="wireframeWidth" type="number" min="0.25" max="8" step="0.25">
+            <label for="wireframeColor">线条颜色</label>
+            <input id="wireframeColor" type="color">
+            <label for="wireframeOpacity">透明度（%）</label>
+            <input id="wireframeOpacity" type="number" min="0" max="100" step="1">
+            <button id="resetWireframeStyle" type="button">恢复 Tripo 默认线框</button>
+          </div>
+        </details>
+        <details>
           <summary>光照效果</summary>
           <div class="grid">
             <label class="check"><input id="studioLighting" type="checkbox">改善模型光照（关闭可恢复）</label>
@@ -2958,13 +3230,22 @@ export function startApp(version) {
           <button id="saveDiscard">放弃并终止</button>
         </div>
       </div>
-    </div>`;
+    </div>
+    <aside class="zoom-rail" id="zoomRail" hidden aria-label="模型精细缩放">
+      <label for="zoomRange">缩放</label>
+      <button class="zoom-step" id="zoomIn" type="button" title="放大 1%">+</button>
+      <input id="zoomRange" type="range" min="25" max="400" step="0.1" value="100" orient="vertical" aria-label="模型缩放百分比" disabled>
+      <button class="zoom-step" id="zoomOut" type="button" title="缩小 1%">−</button>
+      <div class="zoom-number"><input id="zoomValue" type="number" min="25" max="400" step="0.1" aria-label="模型缩放百分比" disabled><span>%</span></div>
+    </aside>`;
 
   document.documentElement.appendChild(host);
 
   const $ = (selector) => shadow.querySelector(selector);
   ui = {
     panel: $('.panel'),
+    zoomRail: $('#zoomRail'), zoomRange: $('#zoomRange'), zoomValue: $('#zoomValue'),
+    zoomIn: $('#zoomIn'), zoomOut: $('#zoomOut'),
     status: $('.status'),
     direction: $('#direction'),
     ratio: $('#ratio'),
@@ -2983,6 +3264,8 @@ export function startApp(version) {
     videoBitrate: $('#videoBitrate'),
     showAxisInOutput: $('#showAxisInOutput'),
     transparentOutput: $('#transparentOutput'),
+    wireframeWidth: $('#wireframeWidth'), wireframeColor: $('#wireframeColor'),
+    wireframeOpacity: $('#wireframeOpacity'),
     studioLighting: $('#studioLighting'),
     lightingEnvironment: $('#lightingEnvironment'),
     lightingDirect: $('#lightingDirect'),
@@ -3048,6 +3331,28 @@ export function startApp(version) {
   ui.saveRetry.addEventListener('click', () => void resumePendingSave(false));
   ui.saveAs.addEventListener('click', () => void resumePendingSave(true));
   ui.saveDiscard.addEventListener('click', discardPendingSave);
+  ui.zoomRange.addEventListener('pointerdown', () => { zoomDragging = true; });
+  const finishZoomDrag = () => { if (zoomDragging) { zoomDragging = false; syncZoomSlider(); } };
+  ui.zoomRange.addEventListener('change', finishZoomDrag);
+  ui.zoomRange.addEventListener('pointercancel', finishZoomDrag);
+  window.addEventListener('pointerup', finishZoomDrag);
+  ui.zoomRange.addEventListener('input', () => setFineZoom(ui.zoomRange.value));
+  ui.zoomIn.addEventListener('click', () => stepFineZoom(1));
+  ui.zoomOut.addEventListener('click', () => stepFineZoom(-1));
+  ui.zoomValue.addEventListener('change', () => {
+    if (ui.zoomValue.value.trim()) setFineZoom(ui.zoomValue.value);
+    ui.zoomValue.blur();
+    syncZoomSlider();
+  });
+  ui.zoomValue.addEventListener('blur', syncZoomSlider);
+  $('#resetWireframeStyle').addEventListener('click', () => {
+    if (zoomLocked()) return;
+    settings.wireframeWidth = DEFAULTS.wireframeWidth;
+    settings.wireframeColor = DEFAULTS.wireframeColor;
+    settings.wireframeOpacity = DEFAULTS.wireframeOpacity;
+    saveSettings(); syncUI(); bindWireframeStyle();
+    setStatus('已恢复 Tripo 默认线框样式', 'ready');
+  });
   $('#minus').addEventListener('click', () => {
     sanitizeSettingsFromUI();
     settings.pixelsPerTurnRatio = Math.max(0.2, settings.pixelsPerTurnRatio * 0.99);
