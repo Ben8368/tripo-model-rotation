@@ -35,24 +35,25 @@ Tripo Studio 3D 模型旋转、录屏与批量导出用户脚本。
 ```text
 @updateURL   https://raw.githubusercontent.com/Ben8368/tripo-model-rotation/master/tripo-model-rotation.user.js
 @downloadURL https://raw.githubusercontent.com/Ben8368/tripo-model-rotation/master/tripo-model-rotation.user.js
-@require     https://raw.githubusercontent.com/Ben8368/tripo-model-rotation/v3.12.6/dist/tripo-core.min.js
 ```
 
-根目录脚本是很小的安装与更新入口，业务核心由 `@require` 从同一 GitHub 仓库的不可变版本标签加载。油猴管理器会缓存远程依赖，不需要注册额外 CDN 账号。
+根目录安装包已内置完整核心，不再依赖版本标签上的 `@require` 文件。此前 3.12.6 入口引用的 `v3.12.6` 标签并未发布，可能让新安装或更新无法取得核心；已缓存旧核心的浏览器仍可运行 3.12.6。若页面面板显示 v3.12.6 且没有顶部按钮，表示浏览器仍运行旧版，需要更新脚本。构建器和测试都会拒绝默认安装包重新引入 `@require`。
 
-后续发布新版本时，更新 `package.json` 的版本号并执行 `npm run check`，构建器会让入口自动指向对应的 `v版本号` 标签。必须同时推送 `master` 和该版本标签，否则新入口无法取得核心文件。核心每次页面加载还会请求 `master/runtime-status.json`：仓库公开、状态启用且当前版本不低于 `minimumVersion` 时才启动，仓库改为私有后匿名请求失败，缓存核心在刷新后也会停止运行。Tampermonkey 或 Violentmonkey 会按自己的更新周期检查入口；也可以在用户脚本管理器中手动执行“检查更新”。
+后续发布新版本时，更新 `package.json` 的版本号并执行 `npm run check`。脚本每次页面加载仍会请求 `master/runtime-status.json`：仓库公开、状态启用且当前版本不低于 `minimumVersion` 时才启动。Tampermonkey 或 Violentmonkey 会按自己的更新周期检查入口；也可以在用户脚本管理器中手动执行“检查更新”。
 
-当前版本：`3.12.6`
+当前版本：`3.12.7`
+
+修改本地仓库不会自动更新浏览器中已安装的用户脚本。发布到 `master` 后等待脚本管理器更新，或手动导入本地构建的 `tripo-model-rotation.user.js`；页面面板上的版本号可用于确认实际运行版本。更新时请停用重复安装的旧副本。
 
 `minimumVersion` 必须是稳定版本格式 `major.minor.patch`（例如 `3.9.5`），按三个数值段比较；缺失或格式无效时拒绝启动。该检查从 3.9.6 起生效，不能追溯修复已缓存的 3.9.5 或更早核心。当前最低版本配置保持 3.9.5，不随本次修复自动提高。
 
-单文件备用包的更新和下载地址均指向 `dist/tripo-model-rotation.standalone.user.js`，后续升级仍保持单文件形式。已安装的旧备用包需要手动安装新版一次才能采用新的更新地址。备用包不依赖远程核心，但仍需通过上述在线运行状态检查，并非离线版本。
+单文件备用包的更新和下载地址均指向 `dist/tripo-model-rotation.standalone.user.js`。两个安装包都包含完整核心，且都需要通过上述在线运行状态检查。
 
 ## 使用方法
 
 1. 打开 [Tripo Studio Generate](https://studio.tripo3d.ai/workspace/generate)。
 2. 等待模型预览器加载完成。
-3. 页面右下角会出现“Tripo 旋转助手”面板。
+3. 点击顶部 DCC Bridge 旁的“旋转助手”按钮，打开或隐藏面板。
 4. 按需选择材质，并设置旋转和输出选项。
 5. 点击“匀速旋转”“加速转场”或“截图当前画面”开始。
 6. 项目名称可以不填；填写后，导出文件会带上项目名称和材质。
@@ -133,15 +134,15 @@ Tripo Studio 3D 模型旋转、录屏与批量导出用户脚本。
 - `src/userscript.meta.txt`：用户脚本元数据模板。
 - `package.json`：唯一版本来源。
 - `scripts/build.mjs`：esbuild 打包脚本。
-- `tripo-model-rotation.user.js`：**自动生成的轻量安装入口，不要直接编辑**；通过 `@require` 加载 GitHub Raw 上的版本核心。
-- `dist/tripo-core.min.js`：发布到 GitHub 版本标签的压缩核心，是远程依赖源。
-- `dist/tripo-model-rotation.standalone.user.js`：完整单文件备用安装包，不依赖远程 `@require`。
+- `tripo-model-rotation.user.js`：**自动生成的完整安装包，不要直接编辑**。
+- `dist/tripo-core.min.js`：与安装包相同的压缩核心，供构建和测试使用。
+- `dist/tripo-model-rotation.standalone.user.js`：完整单文件备用安装包，沿用自身的更新地址。
 - `tests/logic.test.mjs`：直接通过 TS 模块导出接口测试纯逻辑，覆盖未压缩和压缩构建。
 - `tests/regression.test.mjs`：页面集成代码的回归测试，暂保留源码截取 harness。
 - `tests/artifact.test.mjs`：用户脚本发布格式、运行门禁、模拟页面挂载和可重复构建检查。
 - `tests/MANUAL.md`：真实浏览器验收清单。
 
-构建将固定版本的 mp4-muxer 打包进远程核心，压缩代码并缩短局部标识符，移除业务注释，不生成 source map。
+构建将固定版本的 mp4-muxer 打包进压缩核心，缩短局部标识符，移除业务注释，不生成 source map。
 第三方 MIT 许可仍保留在核心、单文件备用包和 `THIRD_PARTY_NOTICES.md` 中。
 为保证浏览器及 Vue/Three.js 集成稳定，不混淆属性名、不使用 eval、自防御或反调试代码。
 
@@ -164,7 +165,7 @@ npm ci
 npm run check
 ```
 
-`npm run check` 先执行 `tsc --noEmit`，再生成轻量入口、GitHub 远程核心和单文件备用包，执行回归测试并做语法检查。
+`npm run check` 先执行 `tsc --noEmit`，再生成完整入口、压缩核心和单文件备用包，执行回归测试并做语法检查。
 依赖由 `package-lock.json` 锁定；运行时只访问本仓库的 GitHub Raw，不访问第三方 CDN。
 mp4-muxer 5.2.2 已被上游标记为 deprecated，本次保留原版本以避免同时变更视频封装行为，后续应单独评估迁移。
 
@@ -174,10 +175,10 @@ mp4-muxer 5.2.2 已被上游标记为 deprecated，本次保留原版本以避�
 2. 修改 `package.json` 的版本号，同步本文版本说明。
 3. 执行 `npm run check`，按 `tests/MANUAL.md` 在 Tripo 实际验收。
 4. 同时提交源码、锁文件、根目录入口和 `dist/` 构建物。
-5. 创建与 `package.json` 完全一致的版本标签，例如 `git tag -a v3.9.6 -m "v3.9.6"`。
-6. 使用 `git push --atomic origin master v3.9.6` 同时发布入口和远程核心。
+5. 创建与 `package.json` 一致的版本标签，例如 `git tag -a v3.12.7 -m "v3.12.7"`。
+6. 使用 `git push --atomic origin master v3.12.7` 同时发布入口与版本标签，随后检查 GitHub Raw 安装文件的版本号和 `@require` 状态。标签用于记录发布版本，不再作为核心加载地址。
 
-不要移动或复用已经发布的版本标签。入口引用版本标签是为了让同一入口版本永久取得同一份核心文件，避免 `master` 更新或缓存造成入口与核心错配。
+不要移动或复用已经发布的版本标签。3.12.7 起，入口自身包含对应版本的核心代码。
 
 ### 3.9.10 相机身份校验兼容性
 
@@ -195,11 +196,11 @@ mp4-muxer 5.2.2 已被上游标记为 deprecated，本次保留原版本以避�
 - 检查失败时显示具体阶段与缺失能力；控制台仅输出结构计数和能力名称，不打印 Vue 状态或账号信息。
 - 自动化回归覆盖未压缩及压缩版本。真实 Tripo 页面验收尚未完成，不能仅凭这些测试确认截图中的现场故障已消除。
 
-本地验证请安装 `dist/tripo-model-rotation.standalone.user.js`；远程入口需发布与当前版本对应的标签后才可加载新核心。
+本地验证可直接安装新构建的 `tripo-model-rotation.user.js`；若浏览器里还装有旧版，请先停用旧副本。
 
 ### TypeScript 迁移状态（已完成）
 
-项目始终以用户脚本形式使用。TS 类型仅用于开发期检查，esbuild 最终仍输出浏览器可执行的 JavaScript IIFE，安装入口、远程核心和 standalone 三种产物的关系保持不变。
+项目始终以用户脚本形式使用。TS 类型仅用于开发期检查，esbuild 最终输出浏览器可执行的 JavaScript IIFE。
 
 已将启动门禁、配置规范化、导出选项、旋转计划、文件名、工程链接校验、工程记录存储解析及批量任务规划迁入严格检查的 TS 模块。网络 JSON 和本地配置以 `unknown` 进入边界，再执行运行时校验；类型不能代替页面兼容性及浏览器能力检查。
 
@@ -217,7 +218,7 @@ mp4-muxer 5.2.2 已被上游标记为 deprecated，本次保留原版本以避�
 - 保留用户明确保存的空批量选择，刷新后不再重新全选。
 - 补充源码及压缩版本回归测试和安装包运行门禁测试。
 
-### 3.9.5 发布结构
+### 3.9.5 发布结构（历史方案，3.12.7 已替换）
 
 - 根目录安装脚本改为轻量入口，通过 `@require` 从 GitHub Raw 加载核心。
 - 核心 URL 固定到 `v版本号` Git 标签，不直接依赖可变的 `master` 核心文件。

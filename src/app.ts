@@ -32,7 +32,7 @@ export function startApp(version) {
   const POINTER_ID = 731945;
   const projectStorage = createProjectStorage(readStorage, writeStorage, PROJECT_NAMES_KEY, PROJECT_LIBRARY_KEY);
   let settings: Settings = loadSettings() as Settings;
-  let panelVisible = true;
+  let panelVisible = false;
   let visibilityRevision = 0;
   let activeRun = null;
   let canvasStatusTimer = 0;
@@ -2320,6 +2320,38 @@ export function startApp(version) {
     if (manual) visibilityRevision += 1;
     panelVisible = visible;
     ui.panel.hidden = !visible;
+    const launcher = document.getElementById(`${SCRIPT_ID}-launcher`);
+    if (launcher) {
+      launcher.setAttribute('aria-expanded', String(visible));
+      launcher.setAttribute('data-state', visible ? 'open' : 'closed');
+    }
+  }
+
+  function ensureLauncher() {
+    if (document.getElementById(`${SCRIPT_ID}-launcher`)) return;
+    const dcc = [...document.querySelectorAll('header button')]
+      .find(button => button.textContent?.includes('DCC Bridge'));
+    if (!dcc) return;
+    const button = document.createElement('button');
+    button.id = `${SCRIPT_ID}-launcher`;
+    button.type = 'button';
+    button.className = dcc.className;
+    button.title = '打开或隐藏 Tripo 旋转助手';
+    button.setAttribute('aria-expanded', String(panelVisible));
+    button.setAttribute('data-state', panelVisible ? 'open' : 'closed');
+    const icon = document.createElement('span');
+    icon.textContent = '⟳';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.style.cssText = 'font-size:18px;line-height:16px;';
+    const label = document.createElement('span');
+    label.className = 'text-3 c-[#fafafa] leading-4 font-500';
+    label.textContent = '旋转助手';
+    button.append(icon, label);
+    button.addEventListener('click', () => {
+      showPanel(!panelVisible, true);
+      if (panelVisible) refreshCanvasStatus();
+    });
+    dcc.after(button);
   }
 
   function scheduleAutoShow() {
@@ -2755,7 +2787,7 @@ export function startApp(version) {
       .project-entry span { overflow-wrap:anywhere; }
       .project-entry small { color:#aeb0b7; font-size:10px; font-weight:400; }
     </style>
-    <section class="panel">
+    <section class="panel" hidden>
       <header>
         <h2>Tripo 旋转助手</h2>
         <span class="hint">v${SCRIPT_VERSION} · 明亮白膜</span>
@@ -3071,11 +3103,13 @@ export function startApp(version) {
   window.addEventListener('beforeunload', handleBeforeUnload);
 
   refreshCanvasStatus();
+  ensureLauncher();
   canvasStatusTimer = window.setInterval(refreshCanvasStatus, 2500);
   window.setTimeout(() => void continueMultiProjectBatch(), 500);
   let assetRefreshTimer = 0;
   if (typeof MutationObserver !== 'undefined' && document.body) {
     new MutationObserver(() => {
+      ensureLauncher();
       window.clearTimeout(assetRefreshTimer);
       assetRefreshTimer = window.setTimeout(() => { injectAssetCheckboxes(); renderMultiBatchStatus(); }, 150);
     }).observe(document.body, { childList: true, subtree: true });

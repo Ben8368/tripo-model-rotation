@@ -3,20 +3,20 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
-const loaderFile = new URL('../tripo-model-rotation.user.js', import.meta.url);
+const installFile = new URL('../tripo-model-rotation.user.js', import.meta.url);
 const coreFile = new URL('../dist/tripo-core.min.js', import.meta.url);
 const standaloneFile = new URL('../dist/tripo-model-rotation.standalone.user.js', import.meta.url);
 const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
 const runtimeStatus = JSON.parse(await readFile(new URL('../runtime-status.json', import.meta.url), 'utf8'));
 
-test('installable loader points to the immutable GitHub release tag',async()=>{
-  const code=await readFile(loaderFile,'utf8');
+test('default installer embeds its core and does not depend on a missing release tag',async()=>{
+  const code=await readFile(installFile,'utf8');
   const pkg=JSON.parse(await readFile(new URL('../package.json',import.meta.url),'utf8'));
   assert(code.startsWith('// ==UserScript==\n'));
   assert(code.includes(`// @version      ${pkg.version}\n`));
-  assert(code.includes(`// @require      https://raw.githubusercontent.com/Ben8368/tripo-model-rotation/v${pkg.version}/dist/tripo-core.min.js\n`));
+  assert(!code.includes('// @require'));
+  assert(code.includes('Copyright (c) 2023 Vanilagy'));
   assert(code.includes('// ==/UserScript==\n'));
-  assert(!code.includes('Copyright (c) 2023 Vanilagy'));
   assert(!code.includes('sourceMappingURL'));assert(!code.includes('sourcesContent'));
   assert(!code.includes('function stopRotation('));
   assert(!code.includes('__SCRIPT_VERSION__'));
@@ -33,29 +33,46 @@ test('remote core has its license, no metadata or source map, and valid syntax',
   new vm.Script(code);
 });
 
-test('remote core mounts its UI and registers shortcuts in a simulated page',async()=>{
-  const code=await readFile(coreFile,'utf8');const elements=new Map(),listeners=new Map();
-  function element() {return {style:{},dataset:{},value:'',hidden:false,checked:false,
-    setAttribute(){},addEventListener(){},append(){},appendChild(){},querySelectorAll:()=>[]};}
+test('default installer mounts a header launcher that opens the panel',async()=>{
+  const code=await readFile(installFile,'utf8');const elements=new Map(),listeners=new Map();
+  function element() {return {style:{},dataset:{},value:'',hidden:false,checked:false,children:[],handlers:{},
+    setAttribute(name,value){this[name]=value;},addEventListener(name,fn){this.handlers[name]=fn;},
+    append(...nodes){this.children.push(...nodes);},appendChild(node){this.children.push(node);},querySelectorAll:()=>[]};}
   const shadow={querySelector(selector){if(!elements.has(selector))elements.set(selector,element());return elements.get(selector);},
     querySelectorAll:()=>[],addEventListener(){}};
   let mounted=false;
+  let launcher, onMutation;
+  const dcc={textContent:'DCC Bridge',className:'gradient-border-header text-3',after(button){launcher=button;}};
   const document={createElement:()=>({...element(),attachShadow:()=>shadow}),
-    createTextNode:text=>({textContent:text}),documentElement:{appendChild(){mounted=true;}},
-    querySelectorAll:()=>[],addEventListener:(name,fn)=>listeners.set(name,fn)};
+    createTextNode:text=>({textContent:text}),documentElement:{appendChild(){mounted=true;}},body:{},
+    querySelectorAll:selector=>selector==='header button'?[dcc]:[],
+    getElementById:id=>id==='tripo-rotation-assistant-launcher'?launcher:null,
+    addEventListener:(name,fn)=>listeners.set(name,fn)};
   const context=vm.createContext({document,window:{setInterval(){},addEventListener(){},setTimeout(){return 0;},clearTimeout(){}},
     localStorage:{getItem:()=>null},location:{pathname:'/workspace/generate'},
     fetch:async()=>({ok:true,json:async()=>runtimeStatus}),
     AbortController:class { constructor(){this.signal={};} abort(){} },
+    MutationObserver:class { constructor(callback){onMutation=callback;} observe(){} },
     console:{info(){},warn(){},error(...args){console.error('artifact core error',...args);}},URL});
   await vm.runInContext(code,context);
   await new Promise(resolve => setImmediate(resolve));
   assert(mounted);assert(shadow.innerHTML.includes(pkg.version));assert(listeners.has('keydown'));
   assert.equal(elements.get('.status').textContent,'等待模型预览器加载…');
+  assert(launcher);
+  assert.equal(launcher.className,dcc.className);
+  assert.equal(launcher.children[1].textContent,'旋转助手');
+  assert.equal(launcher['aria-expanded'],'false');
+  launcher.handlers.click();
+  assert.equal(elements.get('.panel').hidden,false);
+  assert.equal(launcher['aria-expanded'],'true');
+  launcher=undefined;
+  onMutation();
+  assert(launcher);
+  assert.equal(launcher['aria-expanded'],'true');
 });
 
-test('remote core does not mount when GitHub Raw is unavailable',async()=>{
-  const code=await readFile(coreFile,'utf8');let mounted=false;
+test('default installer does not mount when GitHub Raw is unavailable',async()=>{
+  const code=await readFile(installFile,'utf8');let mounted=false;
   const document={createElement:()=>({attachShadow:()=>({})}),documentElement:{appendChild(){mounted=true;}}};
   const context=vm.createContext({document,window:{setTimeout,clearTimeout},fetch:async()=>({ok:false}),
     console:{info(){},warn(){},error(){}},URL});
@@ -82,7 +99,7 @@ for (const [label,status] of [
   ['wrong service',{...runtimeStatus,service:'other'}],
 ]) {
   test(`bundled runtime gate blocks ${label}`,async()=>{
-    for (const file of [coreFile,standaloneFile]) {
+    for (const file of [installFile,coreFile,standaloneFile]) {
       const code=await readFile(file,'utf8');let touchedDOM=false;
       const document={createElement(){touchedDOM=true;throw Error('should not mount');}};
       const context=vm.createContext({document,window:{setTimeout,clearTimeout},AbortController,
@@ -95,8 +112,8 @@ for (const [label,status] of [
 }
 
 test('rebuilding with locked dependencies is byte-for-byte deterministic',async()=>{
-  const before=await Promise.all([loaderFile,coreFile,standaloneFile].map(file=>readFile(file)));
+  const before=await Promise.all([installFile,coreFile,standaloneFile].map(file=>readFile(file)));
   execFileSync(process.execPath,['scripts/build.mjs'],{cwd:new URL('..',import.meta.url),stdio:'pipe'});
-  const after=await Promise.all([loaderFile,coreFile,standaloneFile].map(file=>readFile(file)));
+  const after=await Promise.all([installFile,coreFile,standaloneFile].map(file=>readFile(file)));
   assert.deepEqual(after,before);
 });
