@@ -2336,14 +2336,14 @@ export function startApp(version) {
     button.id = `${SCRIPT_ID}-launcher`;
     button.type = 'button';
     button.className = dcc.className;
-    button.style.cssText = 'box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:9px;width:166px;height:56px;padding:0 17px;flex:0 0 auto;white-space:nowrap;border-radius:999px;';
+    button.style.cssText = 'justify-content:center;min-width:140px;';
     button.title = '打开或隐藏 Tripo 旋转助手';
     button.setAttribute('aria-expanded', String(panelVisible));
     button.setAttribute('data-state', panelVisible ? 'open' : 'closed');
     const icon = document.createElement('span');
     icon.textContent = '⟳';
     icon.setAttribute('aria-hidden', 'true');
-    icon.style.cssText = 'font-size:18px;line-height:16px;';
+    icon.style.cssText = 'font-size:16px;line-height:16px;';
     const label = document.createElement('span');
     label.className = 'text-3 c-[#fafafa] leading-4 font-500';
     label.textContent = '旋转助手';
