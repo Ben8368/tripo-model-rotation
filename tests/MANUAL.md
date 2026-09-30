@@ -2,10 +2,10 @@
 
 自动测试使用模拟 DOM/渲染接口，不能替代真实 Tripo、用户脚本管理器及 WebCodecs 验收。
 
-## 3.12.10 安装与入口验收
+## 3.12.11 安装与入口验收
 
-- 从 GitHub Raw 的根目录 `tripo-model-rotation.user.js` 安装或更新，停用重复安装的旧副本并刷新 `https://studio.tripo3d.ai/zh/workspace/generate`。
-- 面板或用户脚本管理器显示 v3.12.10；仅修改本地仓库不会更新浏览器里运行的 v3.12.9。
+- 从 GitHub Raw 的 `v3.12.11` 固定版本链接安装或更新，停用重复安装的旧副本并刷新 `https://studio.tripo3d.ai/zh/workspace/generate`。
+- 面板或用户脚本管理器显示 v3.12.11；仅修改本地仓库不会更新浏览器里运行的 v3.12.10。
 - 用户脚本元数据不含 `@require`；顶部 DCC Bridge 旁出现“旋转助手”按钮，初始面板隐藏。
 - “旋转助手”入口沿用 DCC Bridge 的高度、内边距和圆角，最小宽度 100px，图标和文字居中且没有挤压相邻按钮。
 - 点击按钮打开/关闭面板；点击面板内“隐藏面板”后仍可用顶部按钮打开。
