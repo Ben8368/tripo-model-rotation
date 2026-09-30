@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
-import { clone as cloneSkeleton } from 'three/addons/utils/SkeletonUtils.js';
+import { copyPageScene } from './scene-copy';
+import { nativeObject } from '../rotation/render-context';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { inspectGlb, glbUrl } from './plan';
 import type { MaterialId, Settings } from '../types/settings';
@@ -95,8 +96,10 @@ export class IndependentRenderer {
   }
 
   snapshot(binding: any, target: number[]): void {
-    // SkeletonUtils reconnects cloned bones, unlike Object3D.clone for skinned models.
-    const root = cloneSkeleton(binding.scene) as THREE.Scene;
+    const scene = nativeObject(binding?.scene);
+    const camera = nativeObject(binding?.camera);
+    if (!camera?.isCamera || !binding?.renderer) throw new Error('当前模型相机或渲染器尚未就绪');
+    const root = copyPageScene(scene, value => this.own(value));
     const geometries = new Map(), textures = new Map(), materials = new Map();
     const cloneTexture = (texture: any) => {
       if (!texture) return null;
@@ -109,7 +112,7 @@ export class IndependentRenderer {
         node.geometry = geometries.get(node.geometry);
       }
       if (node.isInstancedMesh) this.own(node);
-      if (node.skeleton) { node.skeleton.boneTexture = null; this.own(node.skeleton); }
+      if (node.skeleton) this.own(node.skeleton);
       if (!node.material) return;
       const copy = (material: any) => {
         if (material.isShaderMaterial || material.isRawShaderMaterial) {
@@ -132,11 +135,11 @@ export class IndependentRenderer {
     // Copying their Texture wrappers would produce an uninitialized texture in this context.
     this.renderer.toneMapping = binding.renderer.toneMapping;
     this.renderer.toneMappingExposure = binding.renderer.toneMappingExposure;
-    this.camera = binding.camera.isPerspectiveCamera ? new THREE.PerspectiveCamera() : new THREE.OrthographicCamera();
-    this.camera.copy(binding.camera, false);
-    binding.camera.updateWorldMatrix(true, false);
-    binding.camera.getWorldPosition(this.camera.position);
-    binding.camera.getWorldQuaternion(this.camera.quaternion);
+    this.camera = camera.isPerspectiveCamera ? new THREE.PerspectiveCamera() : new THREE.OrthographicCamera();
+    this.camera.copy(camera, false);
+    camera.updateWorldMatrix(true, false);
+    camera.getWorldPosition(this.camera.position);
+    camera.getWorldQuaternion(this.camera.quaternion);
     if (this.camera instanceof THREE.PerspectiveCamera) this.camera.aspect = 1;
     else {
       const halfHeight = (this.camera.top - this.camera.bottom) / 2;
@@ -223,7 +226,8 @@ export class IndependentRenderer {
     if (this.disposed || this.renderer.getContext().isContextLost()) throw new Error('离屏 WebGL 上下文已丢失，请降低分辨率重试');
     for (const entry of this.meshes) entry.mesh.material = entry[material];
     for (const wire of this.wires) wire.visible = wireframe;
-    this.renderer.render(this.scene, this.camera);
+    try { this.renderer.render(this.scene, this.camera); }
+    catch (error) { throw new Error('离屏画面渲染失败：' + error.message, { cause: error }); }
     return this.renderer.domElement;
   }
 

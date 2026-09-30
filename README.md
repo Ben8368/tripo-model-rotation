@@ -16,7 +16,10 @@ Tripo Studio 3D 模型旋转、录屏与批量导出用户脚本。
 - 导出视角还原点
 - 跨多个工程的断点续跑批量导出
 
-## 独立离屏与 GLB 批量导出（3.13.2）
+## 独立离屏与 GLB 批量导出（3.13.3）
+
+3.13.3 加固网页场景复制：使用内置 Three.js 重建对象层级，不调用网页对象可能被覆写的 clone / traverse 方法，避免复制结果为空时继续遍历。骨骼重新绑定至复制后的节点；场景未就绪、无效节点和缺失骨骼会给出明确提示。错误信息区分渲染器创建、模型复制和画面渲染阶段。此修复已通过模拟网页方法覆写的回归测试，用户报错现场尚未复验。
+
 
 离屏渲染已替代默认视频导出：开启「导出离屏视频」时，直接点击原有「匀速旋转」「加速转场」或使用 Alt+1 / Alt+2，即导出当前材质的离屏视频；绿色「导出所选内容」在“仅模型画面”下使用同一份离屏模型输出所选截图和视频。跨工程批量任务也使用离屏引擎，每保存一个文件更新断点进度。不再需要单独的离屏按钮、链接或文件。「离屏导出设置 / 高级来源」中可选 512、1024 或 2048 正方形分辨率。面板正文支持滚轮滚动，展开选项后仍保持在视口内。
 
@@ -43,9 +46,9 @@ MP4 按轨迹分组：每个角度设置一次相机，再依次渲染选中的�
 
 然后点击下面的安装链接：
 
-**[安装 Tripo Model Rotation v3.13.2](https://raw.githubusercontent.com/Ben8368/tripo-model-rotation/v3.13.2/tripo-model-rotation.user.js)**
+**[安装 Tripo Model Rotation v3.13.3](https://raw.githubusercontent.com/Ben8368/tripo-model-rotation/v3.13.3/tripo-model-rotation.user.js)**
 
-也可以打开脚本文件的 [固定版本 GitHub 页面](https://github.com/Ben8368/tripo-model-rotation/blob/v3.13.2/tripo-model-rotation.user.js)，点击 `Raw`，由用户脚本管理器接管安装。发布后的完整安装包也会作为资产放在 [GitHub Releases](https://github.com/Ben8368/tripo-model-rotation/releases/latest)。
+也可以打开脚本文件的 [固定版本 GitHub 页面](https://github.com/Ben8368/tripo-model-rotation/blob/v3.13.3/tripo-model-rotation.user.js)，点击 `Raw`，由用户脚本管理器接管安装。发布后的完整安装包也会作为资产放在 [GitHub Releases](https://github.com/Ben8368/tripo-model-rotation/releases/latest)。
 
 ## 自动更新
 
@@ -60,7 +63,7 @@ MP4 按轨迹分组：每个角度设置一次相机，再依次渲染选中的�
 
 每次修改提交都要在同一提交提升 `package.json` 版本号，并执行 `npm run check`。安装链接固定到对应版本标签，避免 GitHub Raw 的 `master` 地址在发布后的短时间内仍返回旧缓存；自动更新地址仍指向 `master`，可能有几分钟延迟。脚本每次页面加载仍会请求 `master/runtime-status.json`：仓库公开、状态启用且当前版本不低于 `minimumVersion` 时才启动。Tampermonkey 或 Violentmonkey 会按自己的更新周期检查入口；也可以在用户脚本管理器中手动执行“检查更新”。
 
-当前版本：`3.13.2`
+当前版本：`3.13.3`
 
 修改本地仓库不会自动更新浏览器中已安装的用户脚本。发布到 `master` 后等待脚本管理器更新，或手动导入本地构建的 `tripo-model-rotation.user.js`；页面面板上的版本号可用于确认实际运行版本。更新时请停用重复安装的旧副本。
 
@@ -196,8 +199,8 @@ mp4-muxer 5.2.2 已被上游标记为 deprecated，本次保留原版本以避�
 2. 同步本文当前版本说明和固定版本安装链接。CI 会逐个检查本次推送或 PR 的提交是否比各自第一父提交提升版本，并检查锁文件一致性。
 3. 执行 `npm run check`，按 `tests/MANUAL.md` 在 Tripo 实际验收。
 4. 同时提交源码、锁文件、根目录入口和 `dist/` 构建物。
-5. 创建与 `package.json` 一致的版本标签，例如 `git tag -a v3.13.2 -m "v3.13.2"`。
-6. 使用 `git push --atomic origin master v3.13.2` 同时推送入口与版本标签。Release 工作流会从标签自动构建、校验并把两个安装包上传到 GitHub Releases；完成后检查固定版本安装链接的版本号和 `@require` 状态。
+5. 创建与 `package.json` 一致的版本标签，例如 `git tag -a v3.13.3 -m "v3.13.3"`。
+6. 使用 `git push --atomic origin master v3.13.3` 同时推送入口与版本标签。Release 工作流会从标签自动构建、校验并把两个安装包上传到 GitHub Releases；完成后检查固定版本安装链接的版本号和 `@require` 状态。
 
 不要移动或复用已经发布的版本标签。3.12.7 起，入口自身包含对应版本的核心代码。
 

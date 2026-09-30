@@ -2468,7 +2468,8 @@ export function startApp(version) {
         throwIfCancelled();
         if (!sameProject()) throw new Error('当前工程已变化，请重新开始离屏导出');
         const binding = findRenderContext(canvas, true);
-        engine.snapshot(binding, view.target);
+        try { engine.snapshot(binding, view.target); }
+        catch (error) { throw new Error('复制当前模型失败：' + error.message, { cause: error }); }
       });
     } finally {
       activeTask?.cleanups.delete(cancelCopy);
@@ -2487,7 +2488,8 @@ export function startApp(version) {
   async function createIndependentRenderer(size, config) {
     const { IndependentRenderer } = await import('./offscreen/renderer');
     throwIfCancelled();
-    return new IndependentRenderer(size, config);
+    try { return new IndependentRenderer(size, config); }
+    catch (error) { throw new Error('创建离屏渲染器失败：' + error.message, { cause: error }); }
   }
 
   async function exportIndependent(inputs: (File | string)[] | null = null, options: any = {}) {

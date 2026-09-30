@@ -13,7 +13,12 @@ async function run(){
  const oldPosition=camera.position.toArray().join(',');const native=new THREE.WebGLRenderer({alpha:true});
  const engine=new IndependentRenderer(128,config as any);const loaded=new IndependentRenderer(128,config as any);
  try {
-  engine.snapshot({scene,camera,renderer:native},[0,0,0]);
+  const originalClone=scene.clone;
+  // Model the page incompatibility reported by users; snapshot must not call this method.
+  (scene as any).clone=()=>undefined;
+  try { engine.snapshot({scene,camera,renderer:native},[0,0,0]); }
+  finally { scene.clone=originalClone; }
+  assert(true,'snapshot bypasses page clone returning undefined');
   const hashes=[];
   for(const mode of ['pbr','solid','normal']){
    const canvas=engine.render(mode as any,false);const gl=engine.renderer.getContext();const bytes=new Uint8Array(128*128*4);gl.readPixels(0,0,128,128,gl.RGBA,gl.UNSIGNED_BYTE,bytes);
