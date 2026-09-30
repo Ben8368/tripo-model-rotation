@@ -2336,6 +2336,7 @@ export function startApp(version) {
     button.id = `${SCRIPT_ID}-launcher`;
     button.type = 'button';
     button.className = dcc.className;
+    button.style.cssText = 'box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:9px;width:166px;height:56px;padding:0 17px;flex:0 0 auto;white-space:nowrap;border-radius:999px;';
     button.title = '打开或隐藏 Tripo 旋转助手';
     button.setAttribute('aria-expanded', String(panelVisible));
     button.setAttribute('data-state', panelVisible ? 'open' : 'closed');
