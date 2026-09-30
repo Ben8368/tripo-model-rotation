@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { copyPageScene } from './scene-copy';
+import { copyPageResources } from './resource-copy';
 import { nativeObject } from '../rotation/render-context';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { inspectGlb, glbUrl } from './plan';
@@ -55,6 +56,13 @@ export class IndependentRenderer {
 
   constructor(readonly size: number, readonly config: Settings) {
     this.renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, preserveDrawingBuffer: true });
+    // Three normally logs shader compile failures and continues with blank output.
+    this.renderer.debug.onShaderError = (gl, program, vertex, fragment) => {
+      console.error('[Tripo Rotation] 离屏着色器编译失败', {
+        program: gl.getProgramInfoLog(program), vertex: gl.getShaderInfoLog(vertex), fragment: gl.getShaderInfoLog(fragment),
+      });
+      throw new Error('自定义着色器在离屏上下文编译失败，可能依赖网页专属的着色器扩展');
+    };
     this.renderer.setPixelRatio(1);
     this.renderer.setSize(size, size, false);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -100,33 +108,7 @@ export class IndependentRenderer {
     const camera = nativeObject(binding?.camera);
     if (!camera?.isCamera || !binding?.renderer) throw new Error('当前模型相机或渲染器尚未就绪');
     const root = copyPageScene(scene, value => this.own(value));
-    const geometries = new Map(), textures = new Map(), materials = new Map();
-    const cloneTexture = (texture: any) => {
-      if (!texture) return null;
-      if (!textures.has(texture)) textures.set(texture, this.own(texture.clone()));
-      return textures.get(texture);
-    };
-    root.traverse((node: any) => {
-      if (node.geometry) {
-        if (!geometries.has(node.geometry)) geometries.set(node.geometry, this.own(node.geometry.clone()));
-        node.geometry = geometries.get(node.geometry);
-      }
-      if (node.isInstancedMesh) this.own(node);
-      if (node.skeleton) this.own(node.skeleton);
-      if (!node.material) return;
-      const copy = (material: any) => {
-        if (material.isShaderMaterial || material.isRawShaderMaterial) {
-          throw new Error('当前场景含自定义着色器，请使用内嵌贴图的 GLB 导出');
-        }
-        if (!materials.has(material)) {
-          const result = this.own(material.clone()) as any;
-          for (const [key, value] of Object.entries(result) as any) if (value?.isTexture) result[key] = cloneTexture(value);
-          materials.set(material, result);
-        }
-        return materials.get(material);
-      };
-      node.material = Array.isArray(node.material) ? node.material.map(copy) : copy(node.material);
-    });
+    copyPageResources(root, camera, value => this.own(value));
     // A separate Scene owns the environment/background; the source scene is never mutated.
     root.background = null;
     root.environment = null;
@@ -156,7 +138,10 @@ export class IndependentRenderer {
 
   private configureMeshes(): void {
     const nodes: THREE.Mesh[] = [];
-    this.scene.traverse((node: any) => { if (node.isMesh) nodes.push(node); });
+    this.scene.traverseVisible((node: any) => {
+      const materials = Array.isArray(node.material) ? node.material : [node.material];
+      if (node.isMesh && (!this.camera || node.layers.test(this.camera.layers)) && materials.some(m => m?.visible)) nodes.push(node);
+    });
     for (const mesh of nodes) {
       const pbr = mesh.material;
       const variant = (material: THREE.Material, normal: boolean) => {
@@ -164,6 +149,7 @@ export class IndependentRenderer {
         const output = normal ? new THREE.MeshNormalMaterial() : new THREE.MeshStandardMaterial({
           color: this.config.brightSolid ? 0xffffff : 0xd9d9d9, roughness: 0.8, metalness: 0,
         });
+        output.visible = original.visible;
         output.side = original.side;
         output.flatShading = original.flatShading;
         // Retain silhouette cutouts but not the PBR normal map: this pass shows geometric normals.
@@ -176,9 +162,11 @@ export class IndependentRenderer {
       const map = (normal: boolean) => Array.isArray(pbr) ? pbr.map(m => variant(m, normal)) : variant(pbr, normal);
       this.meshes.push({ mesh, pbr, solid: map(false), normal: map(true) });
       if (this.config.batchWireframeVariants) {
-        const wireMaterial = this.own(new THREE.MeshBasicMaterial({ color: this.config.wireframeColor,
+        const wireVariant = (original: THREE.Material) => this.own(new THREE.MeshBasicMaterial({ color: this.config.wireframeColor,
+          visible: original.visible, side: original.side,
           wireframe: true, transparent: true, opacity: this.config.wireframeOpacity,
           depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }));
+        const wireMaterial = Array.isArray(pbr) ? pbr.map(wireVariant) : wireVariant(pbr);
         // A shallow clone retains skinning/morph/instancing behavior and shares owned geometry.
         const wire = mesh.clone(false);
         wire.position.set(0, 0, 0); wire.quaternion.identity(); wire.scale.set(1, 1, 1);
