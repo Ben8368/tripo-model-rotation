@@ -11,7 +11,7 @@ const names = ['runExportAction','animateDrag','stopRotation','throwIfCancelled'
   'exportAll','takeScreenshot','startRotation','hideAxisOverlay','createCanvasFrameSource','createFrameLock',
   'switchMaterial','switchWireframe','waitForTabFrame','createTabCapture','handleScreenshotClick',
   'saveBlob','resumePendingSave','discardPendingSave','handleBeforeUnload','snapshotView','applyView',
-  'isSolidSurfaceMaterial','patchSolidFragment','applyWireframeStyle','prepareRecording'];
+  'isSolidSurfaceMaterial','patchSolidFragment','applyWireframeStyle','prepareRecording','snapshotIndependentModel'];
 const overrides = ['setStatus','sanitizeSettingsFromUI','requestProjectName','plannedExportItems',
   'currentMaterial','toggleIsOn','findWireframeButton','findViewerCanvas','snapshotView','findRenderContext',
   'showPanel','switchMaterial','switchWireframe','buildOutputFilename','takeScreenshot','applyView',
@@ -79,6 +79,35 @@ for (const [variant, code] of [['unminified',plain],['minified',compiled]]) {
     };
     const mp4=await api.prepareRecording(null,{forceRecord:true,frameSource,config:{...api.config,transparentOutput:false,recordingFps:30}});
     assert.equal(mp4.canvas,canvas);assert.equal(mp4.fps,30);assert.equal(chosen.width,128);assert.equal(chosen.height,128);
+  });
+
+  test(variant + ': current-page offscreen copy prepares PBR then restores display before returning', async () => {
+    const {api}=setup(code);const events=[];const canvas={isConnected:true};const view={target:[1,2,3]};
+    const binding={};
+    api.override({findViewerCanvas:()=>canvas,findRenderContext:()=>binding,snapshotView:()=>view,
+      currentMaterial:()=>({id:'normal',label:'法线'}),toggleIsOn:()=>true,findWireframeButton:()=>({}),
+      switchMaterial:async (m,restoring)=>events.push(['material',m.id,!!restoring]),
+      switchWireframe:async (w,restoring)=>events.push(['wire',w,!!restoring]),
+      createFrameLock:()=>({async capture(angle,copy){events.push(['capture',angle]);copy();},release(){events.push(['release']);}}),
+      applyView:()=>events.push(['restore-view']),
+    });
+    await api.snapshotIndependentModel({snapshot(b,target){assert.equal(b,binding);assert.deepEqual(target,view.target);events.push(['copy']);}});
+    assert.deepEqual(events,[['wire',false,false],['material','pbr',false],['capture',0],['copy'],['release'],['material','normal',true],['wire',true,true],['restore-view']]);
+  });
+  test(variant + ': failed or cancelled current-page copy restores the previous display', async () => {
+    for (const cancel of [false,true]) {
+      const {api}=setup(code);const restored=[];let copied=false;
+      api.override({findViewerCanvas:()=>({isConnected:true}),findRenderContext:()=>({}),snapshotView:()=>({target:[0,0,0]}),
+        currentMaterial:()=>({id:'solid'}),toggleIsOn:()=>true,findWireframeButton:()=>({}),
+        switchWireframe:async (w,restore)=>{if(restore)restored.push('wire');},
+        switchMaterial:async (m,restore)=>{if(restore)restored.push(m.id);else if(cancel)api.stopRotation();else throw Error('load failed');},
+        applyView:()=>restored.push('view'),
+      });
+      await api.runExportAction(async()=>{
+        await assert.rejects(api.snapshotIndependentModel({snapshot(){copied=true;}}),cancel?/停止/:/load failed/);
+      });
+      assert.equal(copied,false);assert.deepEqual(restored,['solid','wire','view']);
+    }
   });
 
   function unloadPrevented(api) {

@@ -845,13 +845,12 @@ export function startApp(version) {
     setFineZoom(next);
   }
 
-  function createFrameLock(canvas, initialView = null) {
+  function createFrameLock(canvas, initialView = null, transparent = Boolean(settings.transparentOutput)) {
     const binding = findRenderContext(canvas, true);
     const { controls, renderer, manager, scene, camera } = binding;
     const view = initialView || snapshotView(binding);
     const originalEnabled = controls.enabled;
     const originalRender = renderer.render;
-    const transparent = Boolean(settings.transparentOutput);
     if (transparent && renderer.getContext().getContextAttributes()?.alpha !== true) {
       throw new Error('当前模型 Canvas 不支持 Alpha，无法可靠导出透明背景；请关闭透明选项。');
     }
@@ -2443,6 +2442,48 @@ export function startApp(version) {
     }
   }
 
+  async function snapshotIndependentModel(engine) {
+    const projectId = currentProjectId();
+    const canvas = findViewerCanvas();
+    if (!canvas) throw new Error('请先打开一个已加载的模型');
+    const view = snapshotView(findRenderContext(canvas, true));
+    const material = currentMaterial();
+    const wireframe = toggleIsOn(findWireframeButton());
+    // Unknown modes cannot be restored reliably; fail before changing page state.
+    if (material.id === 'current') throw new Error('尚未识别当前模型材质，请等待模型加载完成后重试');
+    let lock = null;
+    const cancelCopy = () => lock?.release();
+    activeTask?.cleanups.add(cancelCopy);
+    const sameProject = () => currentProjectId() === projectId && canvas.isConnected;
+    try {
+      setStatus('正在自动准备当前网页模型的贴图与几何数据…', 'running');
+      await switchWireframe(false);
+      throwIfCancelled();
+      if (!sameProject()) throw new Error('当前工程已变化，请重新开始离屏导出');
+      await switchMaterial(MATERIALS.find(item => item.id === 'pbr'));
+      throwIfCancelled();
+      if (!sameProject()) throw new Error('当前工程已变化，请重新开始离屏导出');
+      lock = createFrameLock(canvas, view, false);
+      await lock.capture(0, () => {
+        throwIfCancelled();
+        if (!sameProject()) throw new Error('当前工程已变化，请重新开始离屏导出');
+        const binding = findRenderContext(canvas, true);
+        engine.snapshot(binding, view.target);
+      });
+    } finally {
+      activeTask?.cleanups.delete(cancelCopy);
+      lock?.release();
+      // Restore immediately after copying, before the independent renderer starts its trajectory.
+      if (sameProject()) {
+        const failures = [];
+        try { await switchMaterial(material, true); } catch (error) { failures.push(error); }
+        try { await switchWireframe(wireframe, true); } catch (error) { failures.push(error); }
+        try { applyView(findRenderContext(canvas, true), view); } catch (error) { failures.push(error); }
+        if (failures.length) throw new Error('恢复网页显示失败：' + failures.map(error => error.message).join('；'));
+      }
+    }
+  }
+
   async function exportIndependent(inputs: (File | string)[] | null = null) {
     sanitizeSettingsFromUI();
     const config = { ...settings };
@@ -2452,13 +2493,7 @@ export function startApp(version) {
     if (![512, 1024, 2048].includes(size)) throw new Error('请选择有效的离屏分辨率');
     const concurrency = config.transparentOutput ? 1 : 3;
     const groups = groupOffscreenJobs(jobs, concurrency);
-    let sourceBinding = null, sourceTarget = null;
-    if (!inputs) {
-      if (currentMaterial().id !== 'pbr') throw new Error('请先在网页底部选择“贴图”模式，再复制当前模型');
-      if (toggleIsOn(findWireframeButton())) throw new Error('请先关闭网页线框；离屏线框由导出选项单独生成');
-      sourceBinding = findRenderContext(findViewerCanvas(), true);
-      sourceTarget = sourceBinding.controls.getTarget(undefined, false).toArray();
-    }
+    if (!inputs && !findViewerCanvas()) throw new Error('请先打开一个已加载的模型');
     // Request the directory while the initiating click still has user activation.
     const outputTarget = typeof window.showDirectoryPicker === 'function'
       ? { kind: 'directory', handle: await window.showDirectoryPicker({ mode: 'readwrite' }) }
@@ -2480,7 +2515,7 @@ export function startApp(version) {
         setStatus('离屏加载 ' + (modelIndex + 1) + '/' + sources.length + ' · ' + name, 'running');
         const engine = new IndependentRenderer(size, config);
         try {
-          if (source === null) engine.snapshot(sourceBinding, sourceTarget);
+          if (source === null) await snapshotIndependentModel(engine);
           else await engine.load(source, abort.signal);
           throwIfCancelled();
           for (const group of groups) {
@@ -3076,7 +3111,7 @@ export function startApp(version) {
   shadow.innerHTML = `
     <style>
       * { box-sizing: border-box; }
-      .panel { width: 330px; color: #f7f7f8; background: rgba(20,21,25,.94); border: 1px solid rgba(255,255,255,.12); border-radius: 14px; box-shadow: 0 16px 45px rgba(0,0,0,.38); backdrop-filter: blur(16px); overflow: hidden; pointer-events: auto; }
+      .panel { display:flex; flex-direction:column; max-height:calc(100dvh - 36px); width: 330px; color: #f7f7f8; background: rgba(20,21,25,.94); border: 1px solid rgba(255,255,255,.12); border-radius: 14px; box-shadow: 0 16px 45px rgba(0,0,0,.38); backdrop-filter: blur(16px); overflow: hidden; pointer-events: auto; }
       .panel[hidden] { display: none; }
       .zoom-rail { position:absolute; left:-68px; top:50%; transform:translateY(-50%); width:62px; height:min(460px, calc(100vh - 36px)); display:flex; flex-direction:column; align-items:center; gap:6px; padding:10px 5px; border:1px solid rgba(255,255,255,.12); border-radius:12px; background:rgba(20,21,25,.94); box-shadow:0 10px 28px rgba(0,0,0,.3); color:#f7f7f8; pointer-events:auto; }
       .zoom-rail label { font-size:10px; color:#c8c9d0; }
@@ -3084,10 +3119,10 @@ export function startApp(version) {
       .zoom-rail .zoom-step { width:28px; height:25px; padding:0; background:#393341; font-size:17px; line-height:1; }
       .zoom-number { display:flex; align-items:center; gap:1px; color:#c8bfff; font-size:10px; }
       .zoom-number input { width:42px; min-width:42px; padding:3px 2px; text-align:center; color:#c8bfff; font-size:10px; }
-      header { display:flex; align-items:center; justify-content:space-between; padding:12px 13px 10px; border-bottom:1px solid rgba(255,255,255,.08); }
+      header { flex-shrink:0; display:flex; align-items:center; justify-content:space-between; padding:12px 13px 10px; border-bottom:1px solid rgba(255,255,255,.08); }
       h2 { margin:0; font-size:14px; font-weight:700; letter-spacing:.2px; }
       .hint { color:#8d9099; font-size:10px; }
-      .body { padding:11px 13px 13px; }
+      .body { min-height:0; overflow-y:auto; overscroll-behavior:contain; scrollbar-gutter:stable; padding:11px 13px 13px; }
       .status { min-height:31px; display:flex; align-items:center; padding:7px 9px; margin-bottom:10px; border-radius:8px; background:rgba(255,255,255,.055); color:#c7c9cf; font-size:10.5px; line-height:1.4; }
       .status[data-tone="ready"] { color:#91e5b1; }
       .status[data-tone="warning"], .status[data-tone="countdown"] { color:#ffd37a; }
@@ -3170,20 +3205,23 @@ export function startApp(version) {
           <div class="batch-menu" id="batchMenu" hidden role="group" aria-label="导出内容选择">
             <p class="note">先选要导出的内容，再点绿色按钮开始。选项会自动记住。</p>
           </div>
+          <button class="capture" id="offscreenCurrent" type="button">离屏导出当前网页模型</button>
           <button class="stop" id="stop">立即停止</button>
           <button id="hide">隐藏面板</button>
           <details class="capture" style="grid-column:1 / -1">
-            <summary>独立离屏 / GLB 批量导出</summary>
-            <p class="note">使用已勾选的导出内容，逐角度输出多材质。独立画面为正方形，不驱动网页相机。白模、灯光和后处理可能与网页不同。</p>
+            <summary>离屏导出设置 / 高级来源</summary>
+            <p class="note">主面板的“离屏导出当前网页模型”直接读取已加载模型，无需链接或文件，并自动准备贴图后恢复网页显示。沿用上方勾选的导出内容。独立画面为正方形，白模与灯光可能与网页不同。</p>
             <label for="offscreenSize">输出分辨率</label>
             <select id="offscreenSize"><option value="512">512 × 512</option><option value="1024" selected>1024 × 1024</option><option value="2048">2048 × 2048</option></select>
-            <button id="offscreenCurrent" type="button">复制当前贴图模型并导出</button>
+            <details>
+              <summary>高级：导入本地 GLB / 外部直链（可选）</summary>
             <label for="offscreenFiles">本地 GLB（支持多选，不上传）</label>
             <input id="offscreenFiles" type="file" accept=".glb" multiple>
             <button id="offscreenLocal" type="button">批量导出所选 GLB</button>
             <label for="offscreenUrls">HTTPS GLB 直链（每行一个，需支持跨域）</label>
             <textarea id="offscreenUrls" rows="3" style="width:100%;box-sizing:border-box" placeholder="https://…/model.glb"></textarea>
-            <button id="offscreenRemote" type="button">从直链加载并导出</button>
+            <button id="offscreenRemote" type="button">导出外部直链模型</button>
+            </details>
             <p class="note">支持普通 / Meshopt GLB、内嵌贴图。单文件最多 256MB。GLB 自动居中取景；当前模型保留观察目标。线框固定为 WebGL 细线。透明 MOV 为控制内存逐材质导出。Esc 可取消。</p>
           </details>
           <button class="capture" id="checkFrameEntry">检查录制功能</button>
@@ -3358,6 +3396,9 @@ export function startApp(version) {
 
   document.documentElement.appendChild(host);
 
+  // Keep native scrolling inside the panel and prevent bubbling into viewer zoom handlers.
+  shadow.addEventListener('wheel', event => event.stopPropagation(), { passive: true });
+
   const $ = (selector) => shadow.querySelector(selector);
   ui = {
     panel: $('.panel'),
@@ -3433,7 +3474,7 @@ export function startApp(version) {
   }));
   $('#offscreenRemote').addEventListener('click', () => void runExportAction(async () => {
     const urls = $('#offscreenUrls').value.split(/\r?\n/).map(value => value.trim()).filter(Boolean).map(glbUrl);
-    if (!urls.length) throw new Error('请先填写 GLB 直链');
+    if (!urls.length) { await exportIndependent(); return; }
     await exportIndependent(urls);
   }));
   $('#exportAll').addEventListener('click', () => void runExportAction(exportAll));
