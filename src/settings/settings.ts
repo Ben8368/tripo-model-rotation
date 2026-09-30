@@ -5,7 +5,7 @@ import { clamp } from '../utils/numbers';
 type KeysOfType<T, V> = { [K in keyof T]: T[K] extends V ? K : never }[keyof T];
 
 export const DEFAULT_SETTINGS: Readonly<Omit<Settings, 'batchItems'>> & { readonly batchItems: readonly ExportKey[] } = Object.freeze({
-  configVersion: 8,
+  configVersion: 9,
   direction: -1,
   pixelsPerTurnRatio: 1,
   uniformTurns: 1,
@@ -19,10 +19,11 @@ export const DEFAULT_SETTINGS: Readonly<Omit<Settings, 'batchItems'>> & { readon
   autoHide: true,
   recordEnabled: true,
   recordingScope: 'canvas',
+  offscreenSize: 1024,
   recordingFps: 60,
   videoBitrateMbps: 0,
   showAxisInOutput: false,
-  transparentOutput: false,
+  transparentOutput: true,
   batchItems: Object.freeze([...EXPORT_ITEMS.map(item => item.key)]),
   batchWireframeVariants: false,
   wireframeWidth: 1,
@@ -66,12 +67,16 @@ export function normalizeSettings(candidate: unknown): Settings {
     countdown: number('countdown', 0, 10),
     settleDuration: number('settleDuration', 0, 5),
     autoHide: boolean('autoHide'),
-    recordEnabled: boolean('recordEnabled'),
-    recordingScope: source.recordingScope === 'tab' ? 'tab' : DEFAULT_SETTINGS.recordingScope,
+    recordEnabled: true,
+    recordingScope: 'canvas',
+    offscreenSize: [512, 1024, 2048].includes(Number(source.offscreenSize))
+      ? Number(source.offscreenSize) as Settings['offscreenSize'] : DEFAULT_SETTINGS.offscreenSize,
     recordingFps: number('recordingFps', 15, 120),
     videoBitrateMbps: number('videoBitrateMbps', 0, 200),
-    showAxisInOutput: boolean('showAxisInOutput'),
-    transparentOutput: boolean('transparentOutput'),
+    showAxisInOutput: false,
+    // All exports use transparent PNG frames in a MOV container. Legacy values
+    // remain in storage only so old restore points can still be parsed.
+    transparentOutput: true,
     batchItems,
     batchWireframeVariants: boolean('batchWireframeVariants'),
     wireframeWidth: number('wireframeWidth', 0.25, 8),

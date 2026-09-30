@@ -31,6 +31,7 @@ export interface Settings {
   autoHide: boolean;
   recordEnabled: boolean;
   recordingScope: RecordingScope;
+  offscreenSize: 512 | 1024 | 2048;
   recordingFps: number;
   videoBitrateMbps: number;
   showAxisInOutput: boolean;
@@ -88,6 +89,7 @@ export interface MultiProjectBatchSession {
   jobIndex: number;
   /** Frozen job list for the current project, retained across reloads. */
   activeJobs?: Array<{ key: ExportKey; wireframe: boolean }> | null;
+  backgroundSaved?: boolean;
   completedFiles: number;
   error: string;
 }

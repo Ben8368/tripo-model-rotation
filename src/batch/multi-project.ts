@@ -117,7 +117,7 @@ export function createMultiProjectSession(
 ): MultiProjectBatchSession {
   return { id, status: 'running', startedAt, points: [...points], itemKeys: [...itemKeys],
     includeWireframe, settings: structuredClone(settings), pointIndex: 0, jobIndex: 0,
-    activeJobs: null, completedFiles: 0, error: '' };
+    activeJobs: null, backgroundSaved: false, completedFiles: 0, error: '' };
 }
 
 export function parseMultiProjectSession(value: string | null): MultiProjectBatchSession | null {

@@ -6,7 +6,7 @@ import { MATERIALS, EXPORT_KINDS, EXPORT_ITEMS } from './settings/catalog';
 import { makeFramePlan, transitionProgress } from './rotation/frame-plan';
 import { resolveRenderContext, activeCamera, controlsCamera, nativeObject, unref, FrameEntryError } from './rotation/render-context';
 import { clamp } from './utils/numbers';
-import { safeFilenamePart, formatOutputFilename } from './utils/filename';
+import { safeFilenamePart, formatOutputFilename, formatBackgroundFilename } from './utils/filename';
 import { validProjectUrl } from './projects/project-url';
 import type { Settings } from './types/settings';
 import { planBatchJobs, selectedBatchItems } from './batch/plan';
@@ -38,7 +38,6 @@ export function startApp(version) {
   let activeRun = null;
   let canvasStatusTimer = 0;
   let pendingProjectName = null;
-  let pendingBatchStart = null;
   let batchRunning = false;
   let exportBusy = false;
   let activeTask = null;
@@ -359,7 +358,6 @@ export function startApp(version) {
   async function startMultiProjectBatch() {
     if (batchRunning || activeRun) throw new Error('已有导出任务正在运行');
     sanitizeSettingsFromUI();
-    requireCanvasRecording();
     if (typeof window.showDirectoryPicker !== 'function') throw new Error('当前浏览器不支持选择文件夹，请使用新版 Chrome 或 Edge');
     let session = loadMultiBatchSession();
     if (session) {
@@ -411,8 +409,8 @@ export function startApp(version) {
       if (!live || live.id !== session.id || live.status !== 'running') throw new Error('跨工程批量任务已取消');
       session = live;
       if (!session.activeJobs) {
-        session.activeJobs = planMultiProjectJobs(EXPORT_ITEMS, session.itemKeys, session.includeWireframe && wireframeAvailable());
-        session.jobIndex = 0;
+        session.activeJobs = planMultiProjectJobs(EXPORT_ITEMS, session.itemKeys, session.includeWireframe);
+        session.jobIndex = 0; session.backgroundSaved = false;
         persistMultiBatchSession(session);
       }
       const jobs = session.activeJobs.slice(session.jobIndex).map(job => {
@@ -432,6 +430,10 @@ export function startApp(version) {
       try {
         if (jobs.length) await exportIndependent(null, { jobs, config: settings, checkpointOrder: true,
           projectName: point.projectName || ('工程-' + point.projectId.slice(0, 8)),
+          backgroundSaved: session.backgroundSaved,
+          onBackgroundSaved: () => {
+            session = checkSession(); session.backgroundSaved = true; persistMultiBatchSession(session);
+          },
           outputTarget: { kind: 'directory', handle: directory }, check: checkSession,
           onSaved: () => {
             session = checkSession();
@@ -762,7 +764,7 @@ export function startApp(version) {
 
   function zoomLocked() {
     return Boolean(exportBusy || batchRunning || activeRun || pendingSave ||
-      pendingProjectName || pendingBatchStart);
+      pendingProjectName);
   }
 
   function syncZoomSlider() {
@@ -1082,7 +1084,7 @@ export function startApp(version) {
   }
 
   function projectSwitchBlocked() {
-    return Boolean(exportBusy || batchRunning || activeRun || pendingSave || pendingProjectName || pendingBatchStart);
+    return Boolean(exportBusy || batchRunning || activeRun || pendingSave || pendingProjectName);
   }
 
   function switchNamedProject(id) {
@@ -1257,12 +1259,12 @@ export function startApp(version) {
   }
 
   function plannedExportItems() {
-    return planBatchJobs(EXPORT_ITEMS, settings, wireframeAvailable());
+    return planBatchJobs(EXPORT_ITEMS, settings, true);
   }
 
   function syncBatchSelection() {
     const selected = selectedExportItems();
-    const available = wireframeAvailable();
+    const available = true;
     const total = selected.length * (settings.batchWireframeVariants && available ? 2 : 1);
     ui.exportAll.textContent = `导出所选内容（${total} 项）`;
     ui.exportAll.disabled = !selected.length;
@@ -1308,7 +1310,7 @@ export function startApp(version) {
       if (!event.target.matches('input[data-export-key], input[data-wireframe-variants]')) return;
       if (projectSwitchBlocked()) { syncBatchSelection(); return; }
       if (event.target.matches('input[data-wireframe-variants]')) {
-        settings.batchWireframeVariants = event.target.checked && wireframeAvailable();
+        settings.batchWireframeVariants = event.target.checked;
       } else {
         settings.batchItems = [...ui.batchMenu.querySelectorAll('input[data-export-key]:checked')].map(input => input.dataset.exportKey);
       }
@@ -1416,6 +1418,12 @@ export function startApp(version) {
     return dot > 0
       ? `${filename.slice(0, dot)}-已停止${filename.slice(dot)}`
       : `${filename}-已停止`;
+  }
+
+  async function chooseExportDirectory() {
+    return typeof window.showDirectoryPicker === 'function'
+      ? { kind: 'directory', handle: await window.showDirectoryPicker({ mode: 'readwrite' }) }
+      : { kind: 'download' };
   }
 
   async function chooseSingleFile(filename, type) {
@@ -1681,6 +1689,22 @@ export function startApp(version) {
     return null;
   }
 
+  function createExportBackgroundBlob(width, height) {
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext('2d', { alpha: false });
+    const gradient = context.createLinearGradient(0, 0, width, height);
+    gradient.addColorStop(0, '#eef0f3');
+    gradient.addColorStop(0.5, '#c7cbd2');
+    gradient.addColorStop(1, '#8a909a');
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, width, height);
+    return new Promise((resolve, reject) => canvas.toBlob(blob => {
+      if (blob) resolve(blob);
+      else reject(new Error('灰色渐变背景图编码失败'));
+    }, 'image/png'));
+  }
   function createViewerBackgroundCanvas(sourceCanvas) {
     const backgroundCanvas = document.createElement('canvas');
     backgroundCanvas.width = sourceCanvas.width;
@@ -2092,22 +2116,23 @@ export function startApp(version) {
 
   function sanitizeSettingsFromUI() {
     settings.direction = Number(ui.direction.value) === 1 ? 1 : -1;
-    settings.pixelsPerTurnRatio = clamp(ui.ratio.value, 0.2, 3, 1);
+    settings.pixelsPerTurnRatio = DEFAULTS.pixelsPerTurnRatio;
     settings.uniformTurns = Math.round(clamp(ui.uniformTurns.value, 1, 20, 1));
     settings.uniformDuration = clamp(ui.uniformDuration.value, 0.5, 30, 3);
     settings.transitionTurns = clamp(ui.transitionTurns.value, 0.25, 20, 4);
     settings.accelerationDuration = clamp(ui.acceleration.value, 0.05, 20, 0.65);
     settings.cruiseDuration = clamp(ui.cruise.value, 0, 60, 0.7);
     settings.decelerationDuration = clamp(ui.deceleration.value, 0.05, 20, 0.3);
-    settings.countdown = clamp(ui.countdown.value, 0, 10, 2);
+    settings.countdown = DEFAULTS.countdown;
     settings.settleDuration = clamp(ui.settle.value, 0, 5, 0.25);
-    settings.autoHide = ui.autoHide.checked;
-    settings.recordEnabled = ui.recordEnabled.checked;
-    settings.recordingScope = ui.recordingScope.value === 'tab' ? 'tab' : 'canvas';
+    settings.autoHide = false;
+    settings.recordEnabled = true;
+    settings.recordingScope = 'canvas';
+    settings.offscreenSize = normalizeSettings({ offscreenSize: ui.offscreenSize.value }).offscreenSize;
     settings.recordingFps = clamp(ui.recordingFps.value, 15, 120, 60);
-    settings.videoBitrateMbps = clamp(ui.videoBitrate.value, 0, 200, 0);
-    settings.showAxisInOutput = ui.showAxisInOutput.checked;
-    settings.transparentOutput = ui.transparentOutput.checked;
+    settings.videoBitrateMbps = 0;
+    settings.showAxisInOutput = false;
+    settings.transparentOutput = true;
     settings.wireframeWidth = clamp(ui.wireframeWidth.value, 0.25, 8, 1);
     settings.wireframeColor = /^#[0-9a-f]{6}$/i.test(ui.wireframeColor.value)
       ? ui.wireframeColor.value.toLowerCase() : DEFAULTS.wireframeColor;
@@ -2127,22 +2152,15 @@ export function startApp(version) {
 
   function syncUI() {
     ui.direction.value = String(settings.direction);
-    ui.ratio.value = String(settings.pixelsPerTurnRatio);
     ui.uniformTurns.value = String(settings.uniformTurns);
     ui.uniformDuration.value = String(settings.uniformDuration);
     ui.transitionTurns.value = String(settings.transitionTurns);
     ui.acceleration.value = String(settings.accelerationDuration);
     ui.cruise.value = String(settings.cruiseDuration);
     ui.deceleration.value = String(settings.decelerationDuration);
-    ui.countdown.value = String(settings.countdown);
     ui.settle.value = String(settings.settleDuration);
-    ui.autoHide.checked = settings.autoHide;
-    ui.recordEnabled.checked = settings.recordEnabled;
-    ui.recordingScope.value = settings.recordingScope;
+    ui.offscreenSize.value = String(settings.offscreenSize);
     ui.recordingFps.value = String(settings.recordingFps);
-    ui.videoBitrate.value = String(settings.videoBitrateMbps);
-    ui.showAxisInOutput.checked = settings.showAxisInOutput;
-    ui.transparentOutput.checked = settings.transparentOutput;
     ui.wireframeWidth.value = String(settings.wireframeWidth);
     ui.wireframeColor.value = settings.wireframeColor;
     ui.wireframeOpacity.value = String(Math.round(settings.wireframeOpacity * 1000) / 10);
@@ -2156,82 +2174,16 @@ export function startApp(version) {
     for (const input of [ui.lightingEnvironment, ui.lightingDirect, ui.lightingExposure]) {
       input.disabled = !settings.studioLighting;
     }
-    ui.videoBitrate.disabled = settings.transparentOutput;
-    ui.videoBitrate.title = settings.transparentOutput ? '透明 MOV 为无损 PNG 帧，不使用 MP4 码率设置' : '';
   }
 
   async function takeScreenshot(options: any = {}) {
     throwIfCancelled();
-    if (activeRun) {
-      setStatus('请先停止当前旋转，再进行截图', 'warning');
-      return;
-    }
     sanitizeSettingsFromUI();
-    const canvas = findViewerCanvas();
-    if (!canvas) {
-      setStatus('没有找到已加载的模型 Canvas', 'error');
-      return;
-    }
-
-    let source = null;
-    let frameLock = null;
-    let restoreAxis = () => {};
-    const restorePanel = panelVisible;
-    try {
-      setStatus('正在准备高清截图…', 'running');
-      if (settings.transparentOutput && settings.recordingScope === 'tab') {
-        throw new Error('透明导出仅支持“仅模型”范围，标签页录屏不保留 Alpha');
-      }
-      await applySolidLookWhenReady();
-      throwIfCancelled();
-      if (settings.recordingScope === 'tab') {
-        showPanel(false);
-        restoreAxis = hideAxisOverlay(canvas);
-        await nextRenderedFrame();
-        source = await createTabFrameSource(
-          settings.recordingFps,
-          canvas,
-          options.tabCapture || null
-        );
-        await source.waitForFrame();
-        source.drawFrame();
-      } else {
-        frameLock = createFrameLock(canvas, options.batchState?.view);
-        activeTask?.cleanups.add(frameLock.release);
-        source = createCanvasFrameSource(canvas, false);
-        await frameLock.capture(0, (signature) => {
-          verifyBatchFrame(options.batchState, 'screenshot', 0, signature);
-          source.drawFrame();
-        });
-        frameLock.release();
-      }
-      throwIfCancelled();
-      const blob = await new Promise((resolve, reject) => {
-        source.canvas.toBlob(
-          (value) => value ? resolve(value) : reject(new Error('PNG 编码失败')),
-          'image/png',
-          1
-        );
-      });
-      throwIfCancelled();
-      const filename = options.outputFilename
-        ? await saveBlob(blob, options.outputFilename, options.outputTarget)
-        : downloadScreenshot(blob, source, settings.recordingScope);
-      setStatus(`截图已保存：${filename}`, 'ready');
-      return filename;
-    } catch (error) {
-      throwIfCancelled();
-      if (error?.name === 'AbortError') throw error;
-      setStatus(`截图失败：${error.message}`, 'error');
-      console.error('[Tripo Rotation] 截图失败', error);
-      return null;
-    } finally {
-      if (frameLock) activeTask?.cleanups.delete(frameLock.release);
-      frameLock?.release();
-      restoreAxis();
-      source?.cleanup?.();
-      if (restorePanel) showPanel(true);
-    }
+    const material = options.material || currentMaterial();
+    if (!MATERIALS.some(item => item.id === material.id)) throw new Error('请等待当前模型材质加载完成');
+    return exportIndependent(null, { ...options,
+      jobs: [{ kind: 'screenshot', key: 'screenshot:' + material.id, material,
+        wireframe: options.wireframe ?? toggleIsOn(findWireframeButton()) }] });
   }
 
   function syncProjectNameField() {
@@ -2265,23 +2217,6 @@ export function startApp(version) {
     const name = String(value || '').trim();
     if (name && !skip) saveProjectName(name);
     pending.resolve(skip ? `工程-${currentProjectId()}` : name || null);
-  }
-
-  function requestBatchCaptureStart() {
-    if (pendingBatchStart) return pendingBatchStart.promise;
-    let resolvePromise;
-    const promise = new Promise((resolve) => { resolvePromise = resolve; });
-    pendingBatchStart = { promise, resolve: resolvePromise };
-    ui.batchStartModal.hidden = false;
-    return promise;
-  }
-
-  function finishBatchCaptureStart(confirmed) {
-    if (!pendingBatchStart) return;
-    const pending = pendingBatchStart;
-    pendingBatchStart = null;
-    ui.batchStartModal.hidden = true;
-    pending.resolve(Boolean(confirmed));
   }
 
   function findMaterialButton(materialId) {
@@ -2381,24 +2316,17 @@ export function startApp(version) {
 
   async function handleRotationClick(mode: any) {
     sanitizeSettingsFromUI();
-    if (!settings.recordEnabled) {
-      await startRotation(mode);
-      return;
-    }
-    if (settings.recordingScope === 'tab') {
-      setStatus('整标签页目前仅支持截图；视频请切换为“仅模型画面”', 'warning');
-      return;
-    }
     const projectName = await requestProjectName();
     if (!projectName) return;
     recordExportRestorePoint(mode);
     throwIfCancelled();
     const material = currentMaterial();
+    if (!MATERIALS.some(item => item.id === material.id)) throw new Error('请等待当前模型材质加载完成');
     const wireframe = toggleIsOn(findWireframeButton());
     const filename = buildOutputFilename(mode, projectName, material.label, wireframe);
     try {
-      const target = await chooseSingleFile(filename, settings.transparentOutput ? 'video/quicktime' : 'video/mp4');
-      await startRotation(mode, { outputFilename: filename, outputTarget: target, material, wireframe });
+      const target = await chooseExportDirectory();
+      await exportIndependent(null, { projectName, outputFilename: filename, outputTarget: target, material, wireframe, jobs: [{ kind: mode, key: mode + ':' + material.id, material, wireframe }] });
     } catch (error) {
       if (error?.name !== 'AbortError') {
         setStatus(`无法开始导出：${error.message}`, 'error');
@@ -2416,20 +2344,17 @@ export function startApp(version) {
     recordExportRestorePoint('screenshot');
     throwIfCancelled();
     const material = currentMaterial();
+    if (!MATERIALS.some(item => item.id === material.id)) throw new Error('请等待当前模型材质加载完成');
     const filename = buildOutputFilename('screenshot', projectName, material.label, toggleIsOn(findWireframeButton()));
-    let tabCapture = null;
     try {
-      const target = await chooseSingleFile(filename, 'image/png');
+      const target = await chooseExportDirectory();
       throwIfCancelled();
-      // The save picker consumes transient user activation. Obtain a fresh click
-      // before requesting screen sharing instead of reusing the original click.
-      if (settings.recordingScope === 'tab') {
-        if (!await requestBatchCaptureStart()) return;
-        throwIfCancelled();
-        tabCapture = await createTabCapture(settings.recordingFps);
-      }
-      throwIfCancelled();
-      await takeScreenshot({ outputFilename: filename, outputTarget: target, tabCapture });
+      const wireframe = toggleIsOn(findWireframeButton());
+      await exportIndependent(null, {
+        projectName, outputFilename: filename,
+        outputTarget: target,
+        jobs: [{ kind: 'screenshot', key: `screenshot:${material.id}`, material, wireframe }],
+      });
     } catch (error) {
       if (error?.name !== 'AbortError') {
         setStatus(`无法开始截图：${error.message}`, 'error');
@@ -2437,8 +2362,6 @@ export function startApp(version) {
       } else {
         setStatus('已取消保存', 'warning');
       }
-    } finally {
-      tabCapture?.cleanup();
     }
   }
 
@@ -2494,11 +2417,11 @@ export function startApp(version) {
 
   async function exportIndependent(inputs: (File | string)[] | null = null, options: any = {}) {
     if (!options.config) sanitizeSettingsFromUI();
-    const config = { ...(options.config || settings) };
+    const config = normalizeSettings(options.config || settings);
     const jobs: Array<import('./types/settings').ExportItem & { wireframe: boolean }> = options.jobs || planBatchJobs(EXPORT_ITEMS, config, true);
     if (jobs.some(job => job.wireframe)) config.batchWireframeVariants = true;
     if (!jobs.length) throw new Error('请先在导出内容菜单中选择输出项目');
-    const size = options.size || Number($('#offscreenSize').value);
+    const size = options.size || config.offscreenSize;
     if (![512, 1024, 2048].includes(size)) throw new Error('请选择有效的离屏分辨率');
     const concurrency = config.transparentOutput ? 1 : 3;
     // Checkpointed batches must keep the saved job order across reloads.
@@ -2511,15 +2434,14 @@ export function startApp(version) {
       }, []) : groupOffscreenJobs(jobs, concurrency);
     if (!inputs && !findViewerCanvas()) throw new Error('请先打开一个已加载的模型');
     // Request the directory while the initiating click still has user activation.
-    const outputTarget = options.outputTarget || (typeof window.showDirectoryPicker === 'function'
-      ? { kind: 'directory', handle: await window.showDirectoryPicker({ mode: 'readwrite' }) }
-      : { kind: 'download' });
+    const outputTarget = options.outputTarget || await chooseExportDirectory();
     throwIfCancelled();
     const abort = new AbortController();
     const cancel = () => abort.abort();
     activeTask?.cleanups.add(cancel);
     const sources = inputs || [null];
     let completed = 0;
+    let backgrounds = 0;
     let lastFilename = null;
     const check = () => { throwIfCancelled(); options.check?.(); };
     const didSave = async (filename) => {
@@ -2542,7 +2464,15 @@ export function startApp(version) {
           check();
           if (source === null) await snapshotIndependentModel(engine);
           else await engine.load(source, abort.signal);
-          throwIfCancelled();
+          check();
+          if (!options.backgroundSaved) {
+            const background = await createExportBackgroundBlob(size, size);
+            check();
+            await saveBlob(background, formatBackgroundFilename(name), outputTarget.kind === 'file' ? { kind: 'download' } : outputTarget);
+            backgrounds += 1;
+            await options.onBackgroundSaved?.();
+            check();
+          }
           for (const group of groups) {
             throwIfCancelled();
             const kind = group[0].kind;
@@ -2598,108 +2528,23 @@ export function startApp(version) {
           }
         } finally { engine.dispose(); }
       }
-      setStatus('离屏导出完成 · 共保存 ' + completed + ' 个文件', 'ready', true);
+      setStatus('离屏导出完成 · ' + completed + ' 个模型文件 + ' + backgrounds + ' 张背景图', 'ready', true);
       return lastFilename;
     } finally { activeTask?.cleanups.delete(cancel); abort.abort(); }
   }
 
   async function exportAll() {
-    if (batchRunning || activeRun) {
-      setStatus('已有导出任务正在运行', 'warning');
-      return;
-    }
+    if (batchRunning || activeRun) return;
     sanitizeSettingsFromUI();
-    // Snapshot the selection once; changes must never reshape an in-flight batch.
     const jobs = plannedExportItems();
-    if (!jobs.length) {
-      setStatus('请先勾选至少一个导出项目', 'warning');
-      return;
-    }
-    if (settings.recordingScope === 'tab' && jobs.some(job => job.kind !== 'screenshot')) {
-      setStatus('整标签页批量导出仅支持截图；请取消勾选视频，或切换为“仅模型画面”', 'warning');
-      return;
-    }
+    if (!jobs.length) throw new Error('请先勾选至少一个导出项目');
     const projectName = await requestProjectName();
     if (!projectName) return;
     recordExportRestorePoint('batch', jobs.length);
     throwIfCancelled();
-
-    if (settings.recordingScope === 'canvas') {
-      batchRunning = true;
-      try { return await exportIndependent(null, { jobs, projectName }); }
-      finally { batchRunning = false; }
-    }
-
-    let outputTarget: any = { kind: 'download' };
-    let tabCapture = null;
-    let batchState = null;
-    const originalMaterial = currentMaterial();
-    const originalWireframe = toggleIsOn(findWireframeButton());
-    const restorePanel = panelVisible;
-    try {
-      const canvas = findViewerCanvas();
-      if (!canvas) throw new Error('请先打开一个已加载的模型');
-      batchState = { view: snapshotView(findRenderContext(canvas)), signatures: new Map(),
-        plans: { uniform: makeFramePlan('uniform', settings), transition: makeFramePlan('transition', settings) } };
-      if (typeof window.showDirectoryPicker === 'function') {
-        outputTarget = { kind: 'directory', handle: await window.showDirectoryPicker({ mode: 'readwrite' }) };
-        throwIfCancelled();
-      }
-      if (settings.recordingScope === 'tab') {
-        const confirmed = await requestBatchCaptureStart();
-        if (!confirmed) return;
-        throwIfCancelled();
-        tabCapture = await createTabCapture(settings.recordingFps);
-      }
-
-      throwIfCancelled();
-      batchRunning = true;
-      showPanel(false);
-      let completed = 0;
-      const total = jobs.length;
-      const progress = (message) => setStatus(`全导出 ${completed}/${total} · ${message}`, 'running');
-
-      for (const { kind, material, wireframe } of jobs) {
-        throwIfCancelled();
-        const label = EXPORT_KINDS.find(item => item.id === kind).label;
-        progress(`正在导出${material.label}${wireframe ? '线框' : ''}${label}…`);
-        await switchMaterial(material);
-        await switchWireframe(wireframe);
-        throwIfCancelled();
-        const filename = buildOutputFilename(kind, projectName, material.label, wireframe);
-        const options = { forceRecord: true, outputFilename: filename, outputTarget,
-          tabCapture, suppressAutoShow: true, restoreAfter: true, batchState };
-        const saved = kind === 'screenshot' ? await takeScreenshot(options) : await startRotation(kind, options);
-        if (!saved) throw new Error(`${material.label}${wireframe ? '线框' : ''}${label}导出失败`);
-        completed += 1;
-        throwIfCancelled();
-      }
-
-      setStatus(`一键导出完成 · 共保存 ${total} 个文件`, 'ready', true);
-    } catch (error) {
-      if (error?.name === 'AbortError') {
-        setStatus('已取消一键全导出', 'warning');
-      } else {
-        setStatus(`一键全导出失败：${error.message}`, 'error');
-        console.error('[Tripo Rotation] 一键全导出失败', error);
-      }
-    } finally {
-      batchRunning = false;
-      tabCapture?.cleanup?.();
-      if (originalMaterial.id !== 'current') {
-        try { await switchMaterial(originalMaterial, true); } catch (error) {
-          console.warn('[Tripo Rotation] 恢复原显示模式失败', error);
-        }
-      }
-      try { await switchWireframe(originalWireframe, true); } catch (error) {
-        console.warn('[Tripo Rotation] 恢复原线框状态失败', error);
-      }
-      if (batchState) {
-        try { applyView(findRenderContext(findViewerCanvas()), batchState.view); }
-        catch (error) { console.warn('[Tripo Rotation] 恢复批量起始视角失败', error); }
-      }
-      if (restorePanel) showPanel(true);
-    }
+    batchRunning = true;
+    try { return await exportIndependent(null, { jobs, projectName }); }
+    finally { batchRunning = false; }
   }
 
   function setStatus(message, tone = 'normal', persistent = false) {
@@ -2730,9 +2575,7 @@ export function startApp(version) {
     const rect = canvas.getBoundingClientRect();
     const controls = canvas.dataset.cameraControlsVersion || '未知';
     const engine = canvas.dataset.engine || 'Canvas';
-    const recording = settings.recordEnabled
-      ? ` · ${settings.transparentOutput ? '透明 MOV' : 'MP4'} ${settings.recordingFps}fps`
-      : ' · 不录制';
+    const recording = ` · 离屏 ${settings.offscreenSize}² · ${settings.transparentOutput ? '透明 MOV' : 'MP4'} ${settings.recordingFps}fps`;
     setStatus(`已连接 · ${engine} · ${Math.round(rect.width)}×${Math.round(rect.height)}${recording}`, 'ready');
   }
 
@@ -2809,7 +2652,6 @@ export function startApp(version) {
       for (const cleanup of activeTask.cleanups) cleanup();
     }
     if (pendingProjectName) finishProjectName(null);
-    if (pendingBatchStart) finishBatchCaptureStart(false);
     if (!run) {
       setStatus(reason, 'warning');
       return;
@@ -2945,7 +2787,7 @@ export function startApp(version) {
     }
 
     sanitizeSettingsFromUI();
-    if (settings.recordEnabled || options.forceRecord) {
+    if (!options.previewOnly) {
       const material = options.material || currentMaterial();
       if (!MATERIALS.some(item => item.id === material.id)) throw new Error('请等待当前模型材质加载完成');
       const wireframe = options.wireframe ?? toggleIsOn(findWireframeButton());
@@ -2979,7 +2821,7 @@ export function startApp(version) {
     activeRun = run;
 
     try {
-      run.recording = await prepareRecording(canvas, options);
+      run.recording = null;
     } catch (error) {
       activeRun = null;
       if (!options.suppressAutoShow) showPanel(true);
@@ -3167,23 +3009,21 @@ export function startApp(version) {
         <div class="status">正在连接模型预览器…</div>
         <div id="mainPage">
         <div class="primary">
-          <button class="run" id="uniform">匀速旋转</button>
-          <button class="run" id="transition">加速转场</button>
-          <button class="capture" id="screenshot">截图当前画面</button>
+          <button class="run" id="uniform">导出匀速 MOV</button>
+          <button class="run" id="transition">导出转场 MOV</button>
+          <button class="capture" id="screenshot">导出透明 PNG</button>
           <div class="export-split">
             <button class="export-all" id="exportAll">导出所选内容（9 项）</button>
             <button class="export-toggle" id="batchToggle" aria-label="选择导出内容" aria-expanded="false" aria-controls="batchMenu">▾</button>
           </div>
           <div class="batch-menu" id="batchMenu" hidden role="group" aria-label="导出内容选择">
-            <p class="note">先选要导出的内容，再点绿色按钮开始。选项会自动记住。</p>
+            <p class="note">先选要导出的内容，再点绿色按钮开始。视频为透明 MOV，背景 PNG 会随每个模型一同保存。</p>
           </div>
           <button class="stop" id="stop">立即停止</button>
           <button id="hide">隐藏面板</button>
           <details class="capture" style="grid-column:1 / -1">
-            <summary>离屏导出设置 / 高级来源</summary>
-            <p class="note">默认视频及“仅模型画面”批量导出均使用离屏渲染，直接读取当前模型，无需链接。匀速旋转 / 加速转场导出当前材质；绿色按钮导出勾选内容。网页仅在复制模型时临时切换材质，旋转在离屏完成。</p>
-            <label for="offscreenSize">输出分辨率</label>
-            <select id="offscreenSize"><option value="512">512 × 512</option><option value="1024" selected>1024 × 1024</option><option value="2048">2048 × 2048</option></select>
+            <summary>高级来源：本地或直链 GLB</summary>
+            <p class="note">所有导出均使用独立离屏渲染，直接读取当前模型，无需链接。MOV 固定为透明通道；每个模型会另存一张同尺寸灰色渐变背景 PNG，供后期合成使用。网页只在复制模型时临时切换材质，旋转始终在离屏完成。</p>
             <details>
               <summary>高级：导入本地 GLB / 外部直链（可选）</summary>
             <label for="offscreenFiles">本地 GLB（支持多选，不上传）</label>
@@ -3195,7 +3035,6 @@ export function startApp(version) {
             </details>
             <p class="note">支持普通 / Meshopt GLB、内嵌贴图。单文件最多 256MB。GLB 自动居中取景；当前模型保留观察目标。线框固定为 WebGL 细线。透明 MOV 为控制内存逐材质导出。Esc 可取消。</p>
           </details>
-          <button class="capture" id="checkFrameEntry">检查录制功能</button>
           <button class="capture" id="openProjects">已命名项目</button>
           <button class="multi-batch" id="multiBatchStart">多个项目批量导出</button>
           <button id="multiBatchCancel" hidden>取消批量导出</button>
@@ -3208,28 +3047,20 @@ export function startApp(version) {
           <p class="note">导出时会自动保存视角和设置，可用于多个项目批量导出或补导文件。</p>
         </details>
         <details open>
-          <summary>录制与截图输出</summary>
+          <summary>离屏导出设置</summary>
           <div class="project-line">
             <input id="projectName" type="text" placeholder="给当前项目命名（可选）" title="名称按网址中的工程 UUID 分别记忆，允许重名">
             <button id="renameProject">改名</button>
           </div>
           <div class="grid">
-            <label class="check"><input id="recordEnabled" type="checkbox">导出离屏视频（关闭后仅网页旋转预览）</label>
-            <label for="recordingScope">输出范围</label>
-            <select id="recordingScope">
-              <option value="canvas">仅模型画面</option>
-              <option value="tab">整个当前标签页</option>
-            </select>
+            <label for="offscreenSize">输出分辨率</label>
+            <select id="offscreenSize"><option value="512">512 × 512</option><option value="1024" selected>1024 × 1024</option><option value="2048">2048 × 2048</option></select>
             <label for="recordingFps">帧率（FPS）</label>
             <input id="recordingFps" type="number" min="15" max="120" step="1" list="fpsOptions">
             <datalist id="fpsOptions"><option value="24"><option value="25"><option value="30"><option value="50"><option value="60"></datalist>
-            <label for="videoBitrate">视频码率（Mbps，0 为自动）</label>
-            <input id="videoBitrate" type="number" min="0" max="200" step="1">
-            <label class="check"><input id="showAxisInOutput" type="checkbox">输出中显示右上角坐标轴</label>
-            <label class="check"><input id="transparentOutput" type="checkbox">关闭背景 · 透明 MOV / PNG</label>
-            <p class="note">透明背景只支持“仅模型画面”。MOV 画质无损，但文件较大、导出较慢；每段最多 1 GB。</p>
+            <p class="note">视频固定导出为透明 MOV（无损 PNG 帧）；单帧固定导出透明 PNG。每次导出都会附带一张同分辨率的灰色渐变背景 PNG。MOV 文件较大，每段最多 1 GB。</p>
           </div>
-          <p class="note">视频默认由独立离屏渲染器逐帧生成，网页模型不跟随旋转。导出时可以切换标签页，但请勿刷新或关闭 Tripo；如果浏览器暂停绘制，回来后会继续。批量导出不同材质共用起始视角及离屏模型。“整个当前标签页”目前只支持截图；视频请选择“仅模型画面”。</p>
+          <p class="note">视频由独立离屏渲染器逐帧生成，网页模型不跟随旋转。导出时可以切换标签页，但请勿刷新或关闭 Tripo；浏览器暂停绘制时，回来后会继续。批量导出不同材质共用起始视角及离屏模型。</p>
         </details>
         <details>
           <summary>线框样式</summary>
@@ -3262,7 +3093,7 @@ export function startApp(version) {
           </div>
         </details>
         <details>
-          <summary>参数与校准</summary>
+          <summary>离屏运动轨迹</summary>
           <div class="grid">
             <label for="direction">旋转方向</label>
             <select id="direction"><option value="-1">顺时针</option><option value="1">逆时针</option></select>
@@ -3278,16 +3109,8 @@ export function startApp(version) {
             <input id="cruise" type="number" min="0" max="60" step="0.1">
             <label for="deceleration">减速时间（秒）</label>
             <input id="deceleration" type="number" min="0.05" max="20" step="0.05">
-            <label for="countdown">启动倒计时（秒）</label>
-            <input id="countdown" type="number" min="0" max="10" step="1">
-            <label for="settle">结束后停留（秒）</label>
+            <label for="settle">结束静帧（秒）</label>
             <input id="settle" type="number" min="0" max="5" step="0.1">
-            <label class="check"><input id="autoHide" type="checkbox">旋转开始时自动隐藏面板</label>
-          </div>
-          <div class="calibrate">
-            <input id="ratio" type="number" min="0.2" max="3" step="0.01" placeholder="旋转灵敏度" aria-label="旋转灵敏度" title="调整鼠标拖动旋转时的灵敏度">
-            <button id="minus" title="一圈距离减少 1%">−1%</button>
-            <button id="plus" title="一圈距离增加 1%">+1%</button>
           </div>
         </details>
         <details id="accountDetails">
@@ -3336,16 +3159,6 @@ export function startApp(version) {
         </div>
       </div>
     </div>
-    <div class="modal-layer" id="batchStartModal" hidden>
-      <div class="modal-card">
-        <h3>准备共享标签页</h3>
-        <p>你选择了“整个当前标签页”。点击“开始共享”，再从浏览器弹窗中选择当前标签页即可。一次任务只需选择一次；取消或停止后，导出也会停止。</p>
-        <div class="modal-actions">
-          <button id="batchStartCancel">取消</button>
-          <button class="primary-action" id="batchStartConfirm">开始共享</button>
-        </div>
-      </div>
-    </div>
     <div class="modal-layer" id="saveRecoveryModal" hidden role="dialog" aria-modal="true" aria-labelledby="saveRecoveryTitle">
       <div class="modal-card">
         <h3 id="saveRecoveryTitle">文件保存失败 · 导出已暂停</h3>
@@ -3377,22 +3190,15 @@ export function startApp(version) {
     zoomIn: $('#zoomIn'), zoomOut: $('#zoomOut'),
     status: $('.status'),
     direction: $('#direction'),
-    ratio: $('#ratio'),
     uniformTurns: $('#uniformTurns'),
     uniformDuration: $('#uniformDuration'),
     transitionTurns: $('#transitionTurns'),
     acceleration: $('#acceleration'),
     cruise: $('#cruise'),
     deceleration: $('#deceleration'),
-    countdown: $('#countdown'),
     settle: $('#settle'),
-    autoHide: $('#autoHide'),
-    recordEnabled: $('#recordEnabled'),
-    recordingScope: $('#recordingScope'),
+    offscreenSize: $('#offscreenSize'),
     recordingFps: $('#recordingFps'),
-    videoBitrate: $('#videoBitrate'),
-    showAxisInOutput: $('#showAxisInOutput'),
-    transparentOutput: $('#transparentOutput'),
     wireframeWidth: $('#wireframeWidth'), wireframeColor: $('#wireframeColor'),
     wireframeOpacity: $('#wireframeOpacity'),
     studioLighting: $('#studioLighting'),
@@ -3404,7 +3210,6 @@ export function startApp(version) {
     projectName: $('#projectName'),
     projectNameModal: $('#projectNameModal'),
     projectNameInput: $('#projectNameInput'),
-    batchStartModal: $('#batchStartModal'),
     saveRecoveryModal: $('#saveRecoveryModal'),
     saveRecoveryInfo: $('#saveRecoveryInfo'),
     saveRetry: $('#saveRetry'),
@@ -3453,7 +3258,6 @@ export function startApp(version) {
   $('#recordRestorePoint').addEventListener('click', recordManualRestorePoint);
   $('#stop').addEventListener('click', () => stopRotation());
   $('#hide').addEventListener('click', () => showPanel(false, true));
-  $('#checkFrameEntry').addEventListener('click', () => void runExportAction(checkFrameEntry));
   $('#renameProject').addEventListener('click', () => void requestProjectName(true));
   ui.projectName.addEventListener('change', () => {
     if (ui.projectName.value.trim()) saveProjectName(ui.projectName.value);
@@ -3465,8 +3269,6 @@ export function startApp(version) {
     if (event.key === 'Enter') finishProjectName(ui.projectNameInput.value);
     if (event.key === 'Escape') finishProjectName(null);
   });
-  $('#batchStartConfirm').addEventListener('click', () => finishBatchCaptureStart(true));
-  $('#batchStartCancel').addEventListener('click', () => finishBatchCaptureStart(false));
   ui.saveRetry.addEventListener('click', () => void resumePendingSave(false));
   ui.saveAs.addEventListener('click', () => void resumePendingSave(true));
   ui.saveDiscard.addEventListener('click', discardPendingSave);
@@ -3491,16 +3293,6 @@ export function startApp(version) {
     settings.wireframeOpacity = DEFAULTS.wireframeOpacity;
     saveSettings(); syncUI(); bindWireframeStyle();
     setStatus('已恢复 Tripo 默认线框样式', 'ready');
-  });
-  $('#minus').addEventListener('click', () => {
-    sanitizeSettingsFromUI();
-    settings.pixelsPerTurnRatio = Math.max(0.2, settings.pixelsPerTurnRatio * 0.99);
-    saveSettings(); syncUI(); setStatus('一圈距离已减少 1%', 'ready');
-  });
-  $('#plus').addEventListener('click', () => {
-    sanitizeSettingsFromUI();
-    settings.pixelsPerTurnRatio = Math.min(3, settings.pixelsPerTurnRatio * 1.01);
-    saveSettings(); syncUI(); setStatus('一圈距离已增加 1%', 'ready');
   });
 
   shadow.addEventListener('change', () => {

@@ -19,3 +19,7 @@ export function formatOutputFilename(
   }
   return `${project}-转场-${material}.${settings.transparentOutput ? 'mov' : 'mp4'}`;
 }
+
+export function formatBackgroundFilename(projectName: unknown): string {
+  return `${safeFilenamePart(projectName)}-灰色渐变背景.png`;
+}

@@ -10,7 +10,7 @@ for (const minify of [false, true]) {
       contents: `export { meetsMinimumVersion } from './runtime/version';
         export { normalizeSettings, DEFAULT_SETTINGS } from './settings/settings';
         export { makeFramePlan, transitionProgress } from './rotation/frame-plan';
-        export { formatOutputFilename } from './utils/filename';
+        export { formatOutputFilename, formatBackgroundFilename } from './utils/filename';
         export { validProjectUrl } from './projects/project-url';
         export { createProjectStorage, parseProjectNames, parseProjectLibrary, projectNameFor, rememberProject } from './storage/project-library';
         export { planBatchJobs, selectedBatchItems } from './batch/plan';
@@ -51,13 +51,17 @@ for (const minify of [false, true]) {
     const defaults = api.normalizeSettings(null);
     const settings = api.normalizeSettings({ configVersion: 1, direction: '1', recordingFps: 999,
       uniformDuration: 'bad', autoHide: 'false', transparentOutput: true, recordingScope: 'other' });
-    assert.equal(settings.configVersion, 8);
+    assert.equal(settings.configVersion, 9);
     assert.equal(settings.direction, 1);
     assert.equal(settings.recordingFps, 120);
     assert.equal(settings.uniformDuration, defaults.uniformDuration);
     assert.equal(settings.autoHide, true);
     assert.equal(settings.transparentOutput, true);
     assert.equal(settings.recordingScope, 'canvas');
+    assert.equal(settings.offscreenSize, 1024);
+    assert.equal(settings.transparentOutput, true);
+    assert.equal(api.normalizeSettings({ offscreenSize: 2048 }).offscreenSize, 2048);
+    assert.equal(api.normalizeSettings({ offscreenSize: 999 }).offscreenSize, 1024);
     const wireframe = api.normalizeSettings({ wireframeWidth: 99, wireframeColor: '#Ab12Cd', wireframeOpacity: -1 });
     assert.equal(wireframe.wireframeWidth, 8);
     assert.equal(wireframe.wireframeColor, '#ab12cd');
@@ -99,9 +103,10 @@ for (const minify of [false, true]) {
   test(`${variant}: filenames retain format, material, turn count and wireframe convention`, () => {
     const settings = api.normalizeSettings({});
     assert.equal(api.formatOutputFilename('screenshot', ' 工程/一 ', '白膜', settings), '工程-一-单帧-白膜.png');
-    assert.equal(api.formatOutputFilename('uniform', '工程', '贴图', settings, true), '工程-匀速圈（圈数1）-贴图-线框.mp4');
+    assert.equal(api.formatOutputFilename('uniform', '工程', '贴图', settings, true), '工程-匀速圈（圈数1）-贴图-线框.mov');
     settings.transparentOutput = true;
     assert.equal(api.formatOutputFilename('transition', '', '法线', settings), '未命名工程-转场-法线.mov');
+    assert.equal(api.formatBackgroundFilename(' 工程/一 '), '工程-一-灰色渐变背景.png');
   });
   test(`${variant}: project links stay on Tripo and match the stored project identity`, () => {
     const id = '12345678-1234-4123-8123-123456789abc';

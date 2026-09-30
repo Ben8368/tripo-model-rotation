@@ -17,7 +17,7 @@ const overrides = ['setStatus','sanitizeSettingsFromUI','requestProjectName','pl
   'showPanel','switchMaterial','switchWireframe','buildOutputFilename','takeScreenshot','applyView',
   'dispatchPointer','scheduleAutoShow','finalizeRecording','applySolidLook','findAxisOverlay',
   'createViewerBackgroundCanvas','createFrameLock','createCanvasFrameSource','saveBlob','chooseSingleFile',
-  'requestBatchCaptureStart','createTabCapture','exportIndependent','snapshotIndependentModel','createIndependentRenderer','prepareRecording','captureDeterministicFrame','recordExportRestorePoint','sleep'];
+  'createTabCapture','exportIndependent','snapshotIndependentModel','createIndependentRenderer','prepareRecording','captureDeterministicFrame','recordExportRestorePoint','sleep','chooseExportDirectory'];
 // Transitional JS integration harness. TS modules are tested via exports in logic.test.mjs.
 assert(harnessSource.includes("  const host = document.createElement('div');"));
 assert(harnessSource.includes('export function startApp(version) {'));
@@ -45,7 +45,10 @@ function setup(code) {
   const raf = new Map(); let id=0;
   const context = vm.createContext({console:{info(){},warn(){},error(){}},DOMException,structuredClone,
     performance, Blob, URL, AbortController, setTimeout, clearTimeout,
-    window:{setTimeout, clearTimeout}, document:{hidden:false},
+    window:{setTimeout, clearTimeout}, document:{hidden:false,createElement:()=>({
+      getContext:()=>({createLinearGradient:()=>({addColorStop(){}}),fillRect(){}}),
+      toBlob(callback){callback(new Blob(['background'],{type:'image/png'}));},
+    })},
     location:{href:'https://studio.tripo3d.ai/workspace/generate/12345678-1234-4123-8123-123456789abc',pathname:'/workspace/generate/12345678-1234-4123-8123-123456789abc'},
     localStorage:{getItem:()=>null,setItem(){},removeItem(){}}, navigator:{},
     requestAnimationFrame(cb){raf.set(++id,cb);return id;},
@@ -115,14 +118,14 @@ for (const [variant, code] of [['unminified',plain],['minified',compiled]]) {
     api.override({sanitizeSettingsFromUI(){},currentMaterial:()=>({id:'normal',label:'法线'}),
       toggleIsOn:()=>true,findWireframeButton:()=>({}),exportIndependent:async (inputs,options)=>{calls.push(options);return 'saved.mp4';},
       findViewerCanvas(){throw Error('native rotation must not run');},
-      requestProjectName:async()=> 'demo',recordExportRestorePoint(){},buildOutputFilename:()=> 'demo.mp4',chooseSingleFile:async()=>({kind:'file'}),
+      requestProjectName:async()=> 'demo',recordExportRestorePoint(){},buildOutputFilename:()=> 'demo.mov',chooseExportDirectory:async()=>({kind:'directory'}),
     });
     for(const mode of ['uniform','transition'])await api.handleRotationClick(mode);
     api.config.recordEnabled=false;
     assert.equal(await api.startRotation('uniform',{forceRecord:true,outputFilename:'forced.mp4'}),'saved.mp4');
     assert.deepEqual(calls.map(o=>o.jobs[0].kind),['uniform','transition','uniform']);
     assert(calls.every(o=>o.jobs[0].material.id==='normal'&&o.jobs[0].wireframe));
-    assert.equal(calls[0].outputTarget.kind,'file');assert.equal(calls[2].outputFilename,'forced.mp4');
+    assert.equal(calls[0].outputTarget.kind,'directory');assert.equal(calls[2].outputFilename,'forced.mp4');
   });
   test(variant + ': default batch forwards all selected jobs once and never runs native screenshot/material loops', async () => {
     const {api}=setup(code);const jobs=['solid','pbr','normal'].map(id=>({key:'uniform:'+id,kind:'uniform',material:{id,label:id},wireframe:false}));let called=0;
@@ -134,20 +137,32 @@ for (const [variant, code] of [['unminified',plain],['minified',compiled]]) {
   });
   test(variant + ': grouped offscreen export copies once, checkpoints ordered files, and disposes on failure', async () => {
     for(const fail of [false,true]){
-      const {api}=setup(code);let copies=0,disposed=0,poses=0;const saves=[];const outputs=[];
+      const {api}=setup(code);let copies=0,disposed=0,poses=0;const saves=[];const outputs=[];const backgrounds=[];
       const jobs=['pbr','solid','normal'].map(id=>({key:'uniform:'+id,kind:'uniform',material:{id,label:id},wireframe:false}));
       api.override({findViewerCanvas:()=>({}),createIndependentRenderer:async()=>({renderer:{domElement:{}},pose(){poses++;},render(){},dispose(){disposed++;}}),
         snapshotIndependentModel:async()=>{copies++;},prepareRecording:async(c,o)=>({frameIndex:0,outputFilename:o.outputFilename,cleanup(){}}),
         captureDeterministicFrame:async(session)=>{if(fail)throw Error('encode failed');session.frameIndex++;},
         finalizeRecording:async(session)=>{outputs.push(session.frameIndex);return session.outputFilename;},sleep:async()=>{},
+        saveBlob:async(blob,name)=>{backgrounds.push(name);return name;},
       });
       const options={jobs,config:{...api.config,uniformDuration:.5,recordingFps:15,settleDuration:0},size:512,
         projectName:'test',outputTarget:{kind:'directory'},checkpointOrder:true,onSaved:name=>saves.push(name)};
       if(fail)await assert.rejects(api.exportIndependent(null,options),/encode failed/);
-      else {await api.exportIndependent(null,options);assert.equal(saves.length,3);assert.deepEqual(outputs,[8,8,8]);assert.equal(poses,8);}
+      else {await api.exportIndependent(null,options);assert.equal(saves.length,3);assert.deepEqual(outputs,[8,8,8]);assert.equal(poses,24);}
       assert.equal(copies,1);assert.equal(disposed,1);
+      assert.deepEqual(backgrounds,['test-灰色渐变背景.png']);
       if(fail)assert.equal(saves.length,0);
     }
+  });
+  test(`${variant}: single screenshot saves a transparent offscreen PNG and its background`,async()=>{
+    const {api}=setup(code);const saved=[];
+    api.override({sanitizeSettingsFromUI(){},findViewerCanvas:()=>({}),snapshotIndependentModel:async()=>{},
+      createIndependentRenderer:async()=>({pose(){},render(){return {toBlob(callback){callback(new Blob(['model'],{type:'image/png'}));}};},dispose(){}}),
+      saveBlob:async(blob,name)=>{saved.push([name,blob.type]);return name;},sleep:async()=>{},
+    });
+    await api.exportIndependent(null,{projectName:'demo',size:512,outputTarget:{kind:'directory'},
+      jobs:[{kind:'screenshot',key:'screenshot:pbr',material:{id:'pbr',label:'贴图'},wireframe:false}]});
+    assert.deepEqual(saved,[['demo-灰色渐变背景.png','image/png'],['demo-单帧-贴图.png','image/png']]);
   });
 
   function unloadPrevented(api) {
@@ -220,20 +235,14 @@ for (const [variant, code] of [['unminified',plain],['minified',compiled]]) {
     const timerAction=api.runExportAction(async()=>{await api.sleep(60000);api.throwIfCancelled();});
     api.stopRotation();await bounded(timerAction);assert.equal(api.busy,false);
   });
-  test(`${variant}: batch stop prevents remaining jobs and restores original state`,async()=>{
-    const {api}=setup(code);let saved=0;const restored=[];
-    api.config.recordingScope='tab';
-    api.override({sanitizeSettingsFromUI(){},requestProjectName:async()=> 'demo',
+  test(`${variant}: batch stop cancels the shared offscreen task`,async()=>{
+    const {api}=setup(code);let called=0;
+    api.override({sanitizeSettingsFromUI(){},requestProjectName:async()=> 'demo',recordExportRestorePoint(){},
       plannedExportItems:()=>[1,2,3].map(()=>({kind:'screenshot',material:{id:'pbr',label:'pbr'},wireframe:false})),
-      currentMaterial:()=>({id:'solid'}),toggleIsOn:()=>true,findWireframeButton(){},
-      findViewerCanvas:()=>({width:1,height:1,getBoundingClientRect:()=>({width:1,height:1})}),snapshotView:()=>({width:1,height:1,signature:[]}),findRenderContext:()=>({camera:{type:'perspective'}}),showPanel(){},requestBatchCaptureStart:async()=>true,createTabCapture:async()=>({cleanup(){}}),
-      switchMaterial:async(m,restore)=>{if(restore)restored.push(m.id);},
-      switchWireframe:async(w,restore)=>{if(restore)restored.push(w);},
-      buildOutputFilename:()=> 'demo.png',applyView(){restored.push('view');},
-      takeScreenshot:async()=>{saved++;api.stopRotation();return 'demo.png';},
+      exportIndependent:async()=>{called++;api.stopRotation();api.throwIfCancelled();},
     });
     await bounded(api.runExportAction(()=>api.exportAll()));
-    assert.equal(saved,1);assert.deepEqual(restored,['solid',true,'view']);assert.equal(api.busy,false);
+    assert.equal(called,1);assert.equal(api.busy,false);
   });
   test(`${variant}: material switching checks cancellation before proceeding`,async()=>{
     const {api}=setup(code);let ran=false;
@@ -266,8 +275,8 @@ for (const [variant, code] of [['unminified',plain],['minified',compiled]]) {
     assert.equal(invalidations,1);
     assert.equal(api.applyWireframeStyle(true),1);assert.equal(invalidations,1);
   });
-  test(`${variant}: DOM axis visibility restored without erasing output pixels`,()=>{
-    const {api,context}=setup(code);const style=new Map([['visibility',['visible','important']]]);
+  test(`${variant}: DOM axis visibility is restored after model copy`,()=>{
+    const {api}=setup(code);const style=new Map([['visibility',['visible','important']]]);
     api.override({findAxisOverlay:()=>({style:{
       getPropertyValue:k=>style.get(k)?.[0]||'',getPropertyPriority:k=>style.get(k)?.[1]||'',
       setProperty:(k,v,p)=>style.set(k,[v,p]),removeProperty:k=>style.delete(k),
@@ -276,25 +285,6 @@ for (const [variant, code] of [['unminified',plain],['minified',compiled]]) {
     restore();assert.deepEqual(style.get('visibility'),['visible','important']);
     api.config.showAxisInOutput=true;api.hideAxisOverlay({});
     assert.deepEqual(style.get('visibility'),['visible','important']);
-    const draws=[];
-    context.document.createElement=()=>({getContext:()=>({drawImage:(...args)=>draws.push(args)})});
-    const background={};api.override({createViewerBackgroundCanvas:()=>background});
-    const model={width:400,height:400};api.config.showAxisInOutput=false;
-    api.createCanvasFrameSource(model);
-    assert.equal(draws.length,2);assert.equal(draws[0][0],background);assert.equal(draws[1][0],model);
-  });
-  test(`${variant}: stopping a pending screenshot releases lock and skips saving`,async()=>{
-    const {api}=setup(code);let rejectCapture,releaseCount=0,saves=0;
-    api.override({sanitizeSettingsFromUI(){},findViewerCanvas:()=>({}),applySolidLook(){},
-      createFrameLock:()=>({capture:()=>new Promise((_,reject)=>{rejectCapture=reject;}),
-        release:()=>{releaseCount++;rejectCapture?.(Error('released'));}}),
-      createCanvasFrameSource:()=>({cleanup(){}}),saveBlob:async()=>{saves++;},showPanel(){},
-    });
-    const action=api.runExportAction(()=>api.takeScreenshot({outputFilename:'x.png'}));
-    for(let attempt=0;attempt<20 && !rejectCapture;attempt++) await Promise.resolve();
-    assert.equal(typeof rejectCapture,'function');
-    api.stopRotation();await bounded(action);
-    assert(releaseCount>=1);assert.equal(saves,0);assert.equal(api.busy,false);
   });
   test(`${variant}: shared frame wait is cancellable`,async()=>{
     const {api}=setup(code);let cancelled=false;
@@ -302,21 +292,6 @@ for (const [variant, code] of [['unminified',plain],['minified',compiled]]) {
       requestVideoFrameCallback:()=>1,cancelVideoFrameCallback:()=>{cancelled=true;},
     }));
     api.stopRotation();await bounded(action);assert(cancelled);assert.equal(api.busy,false);
-  });
-  test(`${variant}: single tab screenshot requests fresh activation and cleans up capture`,async()=>{
-    const {api}=setup(code);const order=[];
-    api.config.recordingScope='tab';
-    api.override({sanitizeSettingsFromUI(){},requestProjectName:async()=> 'demo',
-      findViewerCanvas:()=>({width:1,height:1,getBoundingClientRect:()=>({width:1,height:1})}),
-      snapshotView:()=>({width:1,height:1,signature:[]}),findRenderContext:()=>({camera:{type:'perspective'}}),
-      currentMaterial:()=>({label:'pbr'}),findWireframeButton(){},toggleIsOn:()=>false,
-      chooseSingleFile:async()=>{order.push('picker');return {};},
-      requestBatchCaptureStart:async()=>{order.push('fresh click');return true;},
-      createTabCapture:async()=>{order.push('share');return {cleanup(){order.push('cleanup');}};},
-      takeScreenshot:async()=>{order.push('screenshot');},
-    });
-    await api.runExportAction(()=>api.handleScreenshotClick());
-    assert.deepEqual(order,['picker','fresh click','share','screenshot','cleanup']);
   });
   test(`${variant}: capture playback failure stops the shared stream`,async()=>{
     const {api,context}=setup(code);let stops=0;
@@ -327,6 +302,7 @@ for (const [variant, code] of [['unminified',plain],['minified',compiled]]) {
   });
   test(`${variant}: frame lock restores DOM axes on release and failed setup`,()=>{
     const {api,context}=setup(code);let hidden=false;let off=0;
+    api.config.transparentOutput=false;
     context.document.addEventListener=()=>{};context.document.removeEventListener=()=>{};
     api.override({findAxisOverlay:()=>({style:{getPropertyValue:()=>'',getPropertyPriority:()=>'',
       setProperty(){hidden=true;},removeProperty(){hidden=false;}}})});
@@ -344,6 +320,7 @@ for (const [variant, code] of [['unminified',plain],['minified',compiled]]) {
   });
   test(`${variant}: native frame lock accepts Vue-wrapped render arguments and rejects camera changes`, async () => {
     const {api,context}=setup(code);
+    api.config.transparentOutput=false;
     context.document.addEventListener=()=>{};context.document.removeEventListener=()=>{};
     const proxy=target=>new Proxy(target,{
       get(target,key,receiver){return key==='__v_raw'?target:Reflect.get(target,key,receiver);},
@@ -378,17 +355,6 @@ for (const [variant, code] of [['unminified',plain],['minified',compiled]]) {
     await assert.rejects(bounded(lock.capture(1,()=>{copies++;})),/相机或工程已变化/);
     assert.equal(copies,1);
     lock.release();assert.equal(controls.enabled,true);assert.equal(renderer.render,originalRender);assert.equal(off,2);
-  });
-  test(`${variant}: stopping during an asynchronous PNG encode skips saving`,async()=>{
-    const {api}=setup(code);let callback,saves=0;
-    api.override({sanitizeSettingsFromUI(){},findViewerCanvas:()=>({}),applySolidLook(){},showPanel(){},
-      createFrameLock:()=>({capture:async()=>{},release(){}}),
-      createCanvasFrameSource:()=>({canvas:{toBlob(cb){callback=cb;}},cleanup(){}}),
-      saveBlob:async()=>{saves++;},
-    });
-    const action=api.runExportAction(()=>api.takeScreenshot({outputFilename:'x.png'}));
-    await new Promise(resolve=>setImmediate(resolve));assert(callback);api.stopRotation();callback(new Blob(['png']));
-    await bounded(action);assert.equal(saves,0);assert.equal(api.busy,false);
   });
 
 }
